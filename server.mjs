@@ -34,9 +34,9 @@ if (existsSync(resolve(root, ".env")))
     if (m && !process.env[m[1]])
       process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, "");
   }
-const port = Number(process.env.PORT || 3000),
-  host = process.env.HOST || "127.0.0.1";
 const production = process.env.NODE_ENV === "production";
+const port = Number(process.env.PORT || 3000),
+  host = process.env.HOST || (production ? "0.0.0.0" : "127.0.0.1");
 // Render terminates HTTPS at its load balancer and provides the public URL.
 // Production defaults are secure so manual Web Service setup does not need to
 // copy Blueprint-only environment values to avoid silently unsafe cookies/data.

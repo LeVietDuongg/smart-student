@@ -83,7 +83,7 @@ Nếu tạo **Web Service** thủ công, nhập các giá trị trên và gắn 
 
 ### Nếu Render báo `Production cần APP_ORIGIN HTTPS...`
 
-Log `==> Running 'yarn start'` thường là bạn tạo Web Service thủ công, nên Render không áp dụng các biến trong Blueprint. Bản mã hiện tại đã tự lấy `RENDER_EXTERNAL_URL` và mặc định `COOKIE_SECURE=1`, `SEED_DEMO=0` trong production. Hãy cập nhật mã mới nhất rồi redeploy.
+Log `==> Running 'yarn start'` thường là bạn tạo Web Service thủ công, nên Render không áp dụng các biến trong Blueprint. Bản mã hiện tại đã tự lấy `RENDER_EXTERNAL_URL`, bind `0.0.0.0`, và mặc định `COOKIE_SECURE=1`, `SEED_DEMO=0` trong production. Hãy cập nhật mã mới nhất rồi redeploy.
 
 Trong **Settings → Environment** của Render, kiểm tra và sửa các trường sau:
 
