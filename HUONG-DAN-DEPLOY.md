@@ -81,6 +81,22 @@ File cấu hình có sẵn:
 
 Nếu tạo **Web Service** thủ công, nhập các giá trị trên và gắn disk trước khi sử dụng. Nếu repo vẫn bọc trong thư mục `smart-student`, đặt Root Directory là `smart-student`; Blueprint ở gốc sẽ thuận tiện hơn.
 
+### Nếu Render báo `Production cần APP_ORIGIN HTTPS...`
+
+Log `==> Running 'yarn start'` thường là bạn tạo Web Service thủ công, nên Render không áp dụng các biến trong Blueprint. Bản mã hiện tại đã tự lấy `RENDER_EXTERNAL_URL` và mặc định `COOKIE_SECURE=1`, `SEED_DEMO=0` trong production. Hãy cập nhật mã mới nhất rồi redeploy.
+
+Trong **Settings → Environment** của Render, kiểm tra và sửa các trường sau:
+
+- Xóa `APP_ORIGIN` nếu đang là `http://127.0.0.1:3000`, `localhost`, URL Vercel hoặc tên miền ví dụ. Để trống để dùng URL HTTPS `onrender.com` Render cấp. Nếu đã có tên miền riêng trỏ thẳng đến Render, dùng URL HTTPS đó.
+- Đặt `COOKIE_SECURE=1`.
+- Đặt `SEED_DEMO=0` để không tạo nội dung demo trong cơ sở dữ liệu production.
+- Đặt `NODE_ENV=production`.
+- Đảm bảo `GEMINI_API_KEY` đã nhập trong Environment, không đặt trong mã nguồn.
+
+Lưu thay đổi và chọn **Manual Deploy → Deploy latest commit**. Không dùng `SEED_DEMO=1` trên dữ liệu thật. Nếu deploy bằng Blueprint, kiểm tra đúng repository/branch và Blueprint gốc `render.yaml` đã cập nhật dịch vụ.
+
+Nếu sau khi khởi động, `/api/health` trả 400 `Host không hợp lệ`, xem `APP_ORIGIN`: một biến cũ có thể đang ghi đè URL Render. Nếu ứng dụng mất dữ liệu sau redeploy, gắn Persistent Disk và đặt `DATA_DIR=/var/data/smart-student` trước khi nhập dữ liệu thật.
+
 ### Đăng nhập quản trị lần đầu
 
 Production tạo một quản trị viên với mật khẩu ngẫu nhiên. Tài khoản demo trên máy cá nhân không được chuyển lên. Trong trang dịch vụ Render, mở **Shell** và chạy:

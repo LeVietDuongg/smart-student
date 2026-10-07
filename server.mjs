@@ -36,16 +36,27 @@ if (existsSync(resolve(root, ".env")))
   }
 const port = Number(process.env.PORT || 3000),
   host = process.env.HOST || "127.0.0.1";
-const { origin, origins: allowedOrigins, hosts: allowedHosts } = deploymentConfig(process.env, host, port);
+const production = process.env.NODE_ENV === "production";
+// Render terminates HTTPS at its load balancer and provides the public URL.
+// Production defaults are secure so manual Web Service setup does not need to
+// copy Blueprint-only environment values to avoid silently unsafe cookies/data.
+const runtimeEnv = {
+  ...process.env,
+  APP_ORIGIN: process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL,
+  COOKIE_SECURE: process.env.COOKIE_SECURE ?? (production ? "1" : "0"),
+};
+const { origin, origins: allowedOrigins, hosts: allowedHosts } = deploymentConfig(runtimeEnv, host, port);
 const ai = aiConfig();
-const secure = process.env.COOKIE_SECURE === "1",
-  production = process.env.NODE_ENV === "production";
+const secure = runtimeEnv.COOKIE_SECURE === "1";
+const seedDemo = process.env.SEED_DEMO === undefined
+  ? !production
+  : process.env.SEED_DEMO === "1";
 if (
   production &&
-  (!secure || !origin.startsWith("https://") || process.env.SEED_DEMO !== "0")
+  (!secure || !origin.startsWith("https://") || seedDemo)
 )
   throw new Error(
-    "Production cần APP_ORIGIN HTTPS, COOKIE_SECURE=1 và SEED_DEMO=0.",
+    "Cấu hình production không an toàn. Trên Render: xóa APP_ORIGIN sai/localhost để dùng RENDER_EXTERNAL_URL, đặt COOKIE_SECURE=1 và SEED_DEMO=0.",
   );
 const cookieName = secure ? "__Host-smart_session" : "smart_session";
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, "data"));
@@ -267,7 +278,7 @@ function videoId(value) {
 
 if (!one("SELECT id FROM users LIMIT 1")) {
   const credentials = [];
-  const demo = process.env.SEED_DEMO !== "0";
+  const demo = seedDemo;
   for (const [email, name, role] of demo
     ? [
         ["admin@smart.edu.vn", "Quản trị Smart Student", "admin"],
@@ -445,7 +456,7 @@ if (!one("SELECT id FROM users LIMIT 1")) {
   );
 }
 if (
-  process.env.SEED_DEMO !== "0" &&
+  seedDemo &&
   !one("SELECT value FROM metadata WHERE key='demo-v2'")
 ) {
   const main = one("SELECT id FROM users WHERE email='minhanh@smart.edu.vn'");
