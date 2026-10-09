@@ -31,6 +31,8 @@ const server = spawn(process.execPath, ["server.mjs"], {
     OPENAI_API_KEY: "",
     AI_PROVIDER: "library",
     ADDITIONAL_ORIGINS: "https://smart-test.vercel.app",
+    ADMIN_EMAIL: "",
+    ADMIN_PASSWORD: "",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });

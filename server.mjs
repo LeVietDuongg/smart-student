@@ -276,19 +276,32 @@ function videoId(value) {
   return vid;
 }
 
+// Hosting without a shell (e.g. Render Free) cannot read initial-credentials.json,
+// so the first admin may be provisioned from secret env vars instead.
+const envAdminEmail = process.env.ADMIN_EMAIL
+  ? emailField(process.env.ADMIN_EMAIL)
+  : "admin@smart.edu.vn";
+const envAdminPassword = process.env.ADMIN_PASSWORD
+  ? validatePassword(process.env.ADMIN_PASSWORD)
+  : null;
 if (!one("SELECT id FROM users LIMIT 1")) {
   const credentials = [];
   const demo = seedDemo;
   for (const [email, name, role] of demo
     ? [
-        ["admin@smart.edu.vn", "Quản trị Smart Student", "admin"],
+        [envAdminEmail, "Quản trị Smart Student", "admin"],
         ["giangvien@smart.edu.vn", "TS. Trần Minh Đức", "teacher"],
         ["minhanh@smart.edu.vn", "Nguyễn Minh Anh", "student"],
       ]
-    : [["admin@smart.edu.vn", "Quản trị Smart Student", "admin"]]) {
-    const password = randomBytes(15).toString("base64url");
+    : [[envAdminEmail, "Quản trị Smart Student", "admin"]]) {
+    const fromEnv = role === "admin" && envAdminPassword;
+    const password = fromEnv || randomBytes(15).toString("base64url");
     const uid = await addUser(email, name, role, password);
-    credentials.push({ email, password, role });
+    credentials.push(
+      fromEnv
+        ? { email, password: "(đặt qua biến môi trường ADMIN_PASSWORD)", role }
+        : { email, password, role },
+    );
     if (role === "student") {
       run("UPDATE users SET coins=2350,xp=450 WHERE id=?", uid);
       run(

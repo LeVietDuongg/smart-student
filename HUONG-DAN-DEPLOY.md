@@ -99,7 +99,16 @@ Nếu sau khi khởi động, `/api/health` trả 400 `Host không hợp lệ`, 
 
 ### Đăng nhập quản trị lần đầu
 
-Production tạo một quản trị viên với mật khẩu ngẫu nhiên. Tài khoản demo trên máy cá nhân không được chuyển lên. Trong trang dịch vụ Render, mở **Shell** và chạy:
+**Render Free (không có Shell, không có Persistent Disk):** trước khi deploy, vào **Environment** của dịch vụ và thêm hai biến bí mật:
+
+| Key | Value |
+|---|---|
+| `ADMIN_EMAIL` | email quản trị bạn muốn dùng |
+| `ADMIN_PASSWORD` | mật khẩu mạnh 12–128 ký tự, chỉ lưu ở Render và trình quản lý mật khẩu của bạn |
+
+Mỗi lần cơ sở dữ liệu trống (lần đầu, sau redeploy/restart, hoặc sau khi dịch vụ Free ngủ 15 phút), máy chủ tạo lại quản trị viên này. Mật khẩu không được ghi ra log hay `initial-credentials.json`. Lưu ý: trên Free, `DATA_DIR` nằm trên ổ tạm (ví dụ `/tmp/smart-student`), nên tài khoản đăng ký, nội dung và xu **sẽ mất** khi dịch vụ ngủ/khởi động lại; chỉ dùng để demo. Đổi mật khẩu quản trị trong web cũng chỉ có hiệu lực đến lần khởi động lại tiếp theo.
+
+**Gói trả phí có Shell + Persistent Disk:** nếu không đặt `ADMIN_PASSWORD`, production tạo một quản trị viên với mật khẩu ngẫu nhiên. Tài khoản demo trên máy cá nhân không được chuyển lên. Trong trang dịch vụ Render, mở **Shell** và chạy:
 
 ```sh
 cat /var/data/smart-student/initial-credentials.json
