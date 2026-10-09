@@ -211,6 +211,15 @@ async function mutate(path, method, body, message) {
   render();
   if (message) toast(message);
 }
+let scenesModule;
+function mount3D() {
+  if (typeof document.querySelector !== "function" || !document.querySelector("[data-scene]")) return;
+  scenesModule ??= import("/scene3d.js?v=1.1.0").catch(() => null);
+  scenesModule.then((m) => {
+    if (m) m.mountScenes();
+    else document.querySelectorAll("[data-scene]").forEach((el) => el.classList.add("scene-fallback"));
+  });
+}
 function navigate(route) {
   if (route === "admin" && state.user.role !== "admin")
     return toast("Bạn không có quyền quản trị.", true);
@@ -240,12 +249,14 @@ function render() {
     state.route = "home";
   document.title = `${nav.find((n) => n[0] === state.route)?.[1] || "Smart Student"} · Smart Student`;
   $("#app").innerHTML =
-    `<header class="topbar"><button class="icon-btn menu-toggle" data-action="menu" aria-label="Mở menu">${icon("menu")}</button>${brand()}<form class="top-search" data-form="search">${icon("search")}<input name="query" aria-label="Tìm kiếm" placeholder="Tìm kiếm bài giảng, tài liệu, giảng viên, môn học…" value="${e(state.query)}"></form><div class="top-account"><button class="icon-btn" data-action="notifications" aria-label="Thông báo">${icon("bell")}${state.user.settings.notifications !== false && state.data.notifications.some((n) => !n.seen) ? `<span class="notification-dot">${state.data.notifications.filter((n) => !n.seen).length}</span>` : ""}</button><button class="account-button" data-nav="settings">${avatar(state.user.name)}<div><b>${e(state.user.name)}</b><small>${roleNames[state.user.role]}${state.user.role === "student" ? " năm " + (state.user.settings.year || 2) : ""}</small></div>${icon("down")}</button></div></header><aside class="sidebar" aria-label="Điều hướng chính">${nav.map(([key, label, ico]) => `<button class="nav-item ${key === state.route ? "active" : ""}" data-nav="${key}" ${key === state.route ? 'aria-current="page"' : ""}>${icon(ico)}${label}</button>`).join("")}${state.user.role === "admin" ? `<button class="nav-item ${route === "admin" ? "active" : ""}" data-nav="admin">${icon("shield")}Quản trị hệ thống</button>` : ""}<div class="sidebar-note">Cùng Smart Student<br><b>biến đại học thành<br>hành trình tuyệt vời nhé!</b> 💗</div><div class="sidebar-robot" role="img" aria-label="Robot sinh viên"></div><div class="sidebar-footer">Một chút cố gắng, một bước tiến xa.</div></aside><div class="mobile-overlay" data-action="menu"></div><main class="main" id="main-content">${pages[state.route]()}<footer class="footer"><span>© ${new Date().getFullYear()} Smart Student · Học thông minh, sống trọn đại học</span><span>Đồng hành mỗi ngày 💙</span></footer></main>`;
+    `<header class="topbar"><button class="icon-btn menu-toggle" data-action="menu" aria-label="Mở menu">${icon("menu")}</button>${brand()}<form class="top-search" data-form="search">${icon("search")}<input name="query" aria-label="Tìm kiếm" placeholder="Tìm kiếm bài giảng, tài liệu, giảng viên, môn học…" value="${e(state.query)}"></form><div class="top-account"><button class="icon-btn" data-action="notifications" aria-label="Thông báo">${icon("bell")}${state.user.settings.notifications !== false && state.data.notifications.some((n) => !n.seen) ? `<span class="notification-dot">${state.data.notifications.filter((n) => !n.seen).length}</span>` : ""}</button><button class="account-button" data-nav="settings">${avatar(state.user.name)}<div><b>${e(state.user.name)}</b><small>${roleNames[state.user.role]}${state.user.role === "student" ? " năm " + (state.user.settings.year || 2) : ""}</small></div>${icon("down")}</button></div></header><aside class="sidebar" aria-label="Điều hướng chính">${nav.map(([key, label, ico]) => `<button class="nav-item ${key === state.route ? "active" : ""}" data-nav="${key}" ${key === state.route ? 'aria-current="page"' : ""}>${icon(ico)}${label}</button>`).join("")}${state.user.role === "admin" ? `<button class="nav-item ${route === "admin" ? "active" : ""}" data-nav="admin">${icon("shield")}Quản trị hệ thống</button>` : ""}<div class="sidebar-footer">Một chút cố gắng mỗi ngày.</div></aside><div class="mobile-overlay" data-action="menu"></div><main class="main" id="main-content">${pages[state.route]()}<footer class="footer"><span>© ${new Date().getFullYear()} Smart Student</span><span>Học thông minh, sống trọn đại học</span></footer></main>`;
+  mount3D();
 }
 function renderAuth(error = "") {
   const register = state.authMode === "register";
   $("#app").innerHTML =
-    `<main class="auth-page"><section class="auth-visual">${brand()}<div class="auth-slogan"><h1>Học thông minh.<br>Sống trọn<br>đại học.</h1><p>Mỗi ngày một bước tiến,<br>mỗi hành trình một người bạn.</p></div><span class="badge">✦ Không gian học tập dành cho bạn</span></section><section class="auth-form">${brand()}<h2>${register ? "Bắt đầu hành trình ✨" : "Chào mừng trở lại 👋"}</h2><p>${register ? "Tạo tài khoản sinh viên để học, chơi và tiến bộ mỗi ngày." : "Đăng nhập để tiếp tục hành trình học tập của bạn."}</p>${error ? `<div class="error-text" role="alert">${e(error)}</div>` : ""}<form data-form="auth">${register ? '<label class="field">Họ và tên<input name="name" autocomplete="name" minlength="2" maxlength="80" placeholder="Nguyễn Minh Anh" required></label>' : ""}<label class="field">Email<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="ban@example.com" required></label><label class="field">Mật khẩu<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" ${register ? 'minlength="12"' : ""} maxlength="128" placeholder="${register ? "Ít nhất 12 ký tự" : "Nhập mật khẩu của bạn"}" required></label>${register ? '<p class="tiny muted">Tài khoản mới được cấp quyền sinh viên. Mật khẩu được bảo vệ trên máy chủ.</p>' : ""}<button class="btn w-full" type="submit">${register ? "Tạo tài khoản" : "Đăng nhập"} ${icon("chevron")}</button></form><div class="auth-switch">${register ? "Đã có tài khoản?" : "Bạn chưa có tài khoản?"} <button data-action="auth-switch">${register ? "Đăng nhập" : "Đăng ký ngay"}</button></div><div class="auth-foot">Một không gian cho lịch học, tài liệu và những mục tiêu.<br>Smart Student · Học thông minh, sống trọn đại học</div></section></main>`;
+    `<main class="auth-page"><section class="auth-visual"><div class="scene-host" data-scene="campus"></div>${brand()}<div class="auth-slogan"><h1>Học thông minh.<br>Sống trọn đại học.</h1><p>Lịch học, tài liệu, trợ lý AI và game ôn tập trong một nơi.</p></div></section><section class="auth-form">${brand()}<h2>${register ? "Tạo tài khoản" : "Chào mừng trở lại"}</h2><p>${register ? "Tạo tài khoản sinh viên để học, chơi và tiến bộ mỗi ngày." : "Đăng nhập để tiếp tục hành trình học tập của bạn."}</p>${error ? `<div class="error-text" role="alert">${e(error)}</div>` : ""}<form data-form="auth">${register ? '<label class="field">Họ và tên<input name="name" autocomplete="name" minlength="2" maxlength="80" placeholder="Nguyễn Minh Anh" required></label>' : ""}<label class="field">Email<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="ban@example.com" required></label><label class="field">Mật khẩu<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" ${register ? 'minlength="12"' : ""} maxlength="128" placeholder="${register ? "Ít nhất 12 ký tự" : "Nhập mật khẩu của bạn"}" required></label>${register ? '<p class="tiny muted">Tài khoản mới được cấp quyền sinh viên. Mật khẩu được bảo vệ trên máy chủ.</p>' : ""}<button class="btn w-full" type="submit">${register ? "Tạo tài khoản" : "Đăng nhập"} ${icon("chevron")}</button></form><div class="auth-switch">${register ? "Đã có tài khoản?" : "Bạn chưa có tài khoản?"} <button data-action="auth-switch">${register ? "Đăng nhập" : "Đăng ký ngay"}</button></div><div class="auth-foot">Smart Student, cổng học tập cho sinh viên.</div></section></main>`;
+  mount3D();
 }
 function tasksList(limit = 100) {
   return (
@@ -363,7 +374,7 @@ function homePage() {
     percent = d.tasks.length ? Math.round((done / d.tasks.length) * 100) : 0;
   const todaySeconds =
     d.stats.activity.find((a) => a.day === d.today)?.seconds || 0;
-  return `<div class="dashboard"><div class="welcome-row"><section class="welcome-banner"><div class="welcome-copy"><p>Chào mừng trở lại,</p><h1>${e(state.user.name)} !</h1><small>Hôm nay là một ngày tuyệt vời để học điều mới ✨</small><div class="welcome-quote">❝ &nbsp; Kỷ luật hôm nay,<br>&nbsp;&nbsp;&nbsp;&nbsp; là tự do của ngày mai.</div></div></section><section class="panel quick-panel"><h3>Hôm nay bạn muốn làm gì?</h3><div class="quick-grid">${[
+  return `<div class="dashboard"><div class="welcome-row"><section class="welcome-banner"><div class="scene-host" data-scene="desk"></div><div class="welcome-copy"><p>Chào mừng trở lại,</p><h1>${e(state.user.name)}</h1><small>${d.tasks.length - done ? `Hôm nay còn ${d.tasks.length - done} việc cần làm.` : "Bạn đã xong mọi việc hôm nay."}</small><blockquote class="welcome-quote">Kỷ luật hôm nay là tự do của ngày mai.</blockquote></div></section><section class="panel quick-panel"><h3>Hôm nay bạn muốn làm gì?</h3><div class="quick-grid">${[
     ["ai", "Hỏi AI", "bot"],
     ["materials", "Xem bài giảng", "play"],
     ["games", "Làm quiz", "trophy"],
@@ -385,7 +396,7 @@ function homePage() {
     )
     .join(
       "",
-    )}</section></div><div class="dash-middle"><section class="panel"><div class="flex between"><div class="ai-intro"><span class="bot-icon">🤖</span><div><h3>AI HỌC TẬP</h3><p class="tiny muted">Trợ lý học tập thông minh luôn bên bạn</p></div></div><span class="badge red">${d.aiMode === "online" ? "AI" : "Thư viện"}</span></div><form class="ai-input" data-form="home-ai">${icon("search")}<input name="message" placeholder="Bạn muốn hỏi gì hôm nay?" aria-label="Câu hỏi học tập" maxlength="2000" required><button class="btn" aria-label="Gửi câu hỏi">${icon("send")}</button></form><div class="suggestions">${[
+    )}</section></div><div class="dash-middle"><section class="panel"><div class="flex between"><div class="ai-intro"><span class="bot-icon">${icon("bot")}</span><div><h3>AI học tập</h3><p class="tiny muted">Trợ lý học tập thông minh luôn bên bạn</p></div></div><span class="badge red">${d.aiMode === "online" ? "AI" : "Thư viện"}</span></div><form class="ai-input" data-form="home-ai">${icon("search")}<input name="message" placeholder="Bạn muốn hỏi gì hôm nay?" aria-label="Câu hỏi học tập" maxlength="2000" required><button class="btn" aria-label="Gửi câu hỏi">${icon("send")}</button></form><div class="suggestions">${[
     ["summary", "Tóm tắt kiến thức"],
     ["solve", "Giải bài tập"],
     ["plan", "Lập kế hoạch học tập"],
@@ -398,32 +409,32 @@ function homePage() {
     .join("")}</div><div class="ai-tiles">${[
     [
       "summary",
-      "🔮",
+      "star",
       "Tổng hợp kiến thức",
       "Tóm tắt nhanh, dễ hiểu",
       "lavender",
     ],
-    ["solve", "📚", "Tra cứu bài tập", "Gợi ý từ thư viện môn học", "sky"],
+    ["solve", "book", "Tra cứu bài tập", "Gợi ý từ thư viện môn học", "sky"],
     [
       "plan",
-      "🗓️",
+      "calendar",
       "Lập kế hoạch học tập",
       "Gợi ý lịch học cá nhân",
       "lavender",
     ],
     [
       "analysis",
-      "📊",
+      "chart",
       "Phân tích tiến độ",
       "Theo dõi điểm và công việc",
       "peach",
     ],
-    ["stats", "📗", "Báo cáo học tập", "Hiển thị kết quả sau mỗi ngày", "mint"],
-    ["tasks", "⏰", "Thông báo thời gian", "Nhắc nhở cân bằng học tập", "pink"],
+    ["stats", "check", "Báo cáo học tập", "Hiển thị kết quả sau mỗi ngày", "mint"],
+    ["tasks", "clock", "Thông báo thời gian", "Nhắc nhở cân bằng học tập", "pink"],
   ]
     .map(
       ([mode, emoji, title, desc, color]) =>
-        `<button class="ai-tile ${color}" ${["stats", "tasks"].includes(mode) ? `data-nav="${mode}"` : `data-action="ai-mode" data-id="${mode}"`}><span class="emoji">${emoji}</span><b>${title}</b><p>${desc}</p></button>`,
+        `<button class="ai-tile ${color}" ${["stats", "tasks"].includes(mode) ? `data-nav="${mode}"` : `data-action="ai-mode" data-id="${mode}"`}><span class="tile-icon">${icon(emoji)}</span><b>${title}</b><p>${desc}</p></button>`,
     )
     .join(
       "",
@@ -438,7 +449,7 @@ function homePage() {
     )
     .join(
       "",
-    )}</div>${calendarWidget()}</section><div class="right-stack"><section class="panel">${panelHead("To do list", "check", "tasks")}${taskEntry()}${tasksList(5)}</section><section class="panel time-card"><div class="flex between"><h3>Thời gian học hôm nay</h3>${icon("clock")}</div><div class="time-value">${Math.floor(todaySeconds / 3600)}h ${Math.floor((todaySeconds % 3600) / 60)}m</div><div class="time-segments"></div><div class="time-legend"><span>🔵 Trên website<b>${Math.floor(todaySeconds / 60)} phút</b></span><span>🌸 Nhịp học<b>25 phút / phiên</b></span><span>🟡 Nghỉ ngơi<b>5 phút</b></span></div></section></div></div><div class="dash-lower"><section class="panel">${panelHead("Game học tập", "game", "games")}<p class="tiny muted">Học mà chơi · Chơi mà nhớ lâu</p><div class="mini-games">${miniGames()}</div></section><section class="panel">${panelHead("Bài giảng & Tài liệu", "book", "materials")}<div class="tabs"><button class="chip active" data-nav="materials">Bài học</button><button class="chip" data-nav="materials">Đề tự kiểm tra</button><button class="chip" data-nav="materials">Tài liệu</button></div><div class="lesson-grid">${lessonCards()}</div><div class="doc-grid">${docCards()}</div></section><section class="panel">${panelHead("Hội nhóm học tập", "users", "groups")}<div class="group-list">${groupLines()}</div></section></div><div class="dash-bottom"><section class="panel">${panelHead("Tính điểm", "calc", "grades")}<div class="tabs"><button class="chip active">Điểm học phần</button></div>${gradeForm(true)}</section><section class="panel">${panelHead("Sự kiện mới nhất", "event", "events")}<div class="tabs"><button class="chip active" data-nav="events">Tất cả</button><button class="chip" data-nav="events">Học thuật</button><button class="chip" data-nav="events">Kỹ năng</button></div><div class="events-mini">${d.events
+    )}</div>${calendarWidget()}</section><div class="right-stack"><section class="panel">${panelHead("To do list", "check", "tasks")}${taskEntry()}${tasksList(5)}</section><section class="panel time-card"><div class="flex between"><h3>Thời gian học hôm nay</h3>${icon("clock")}</div><div class="time-value">${Math.floor(todaySeconds / 3600)}h ${Math.floor((todaySeconds % 3600) / 60)}m</div><div class="time-segments"></div><div class="time-legend"><span><i class="dot web"></i>Trên website<b>${Math.floor(todaySeconds / 60)} phút</b></span><span><i class="dot focus"></i>Nhịp học<b>25 phút / phiên</b></span><span><i class="dot rest"></i>Nghỉ ngơi<b>5 phút</b></span></div></section></div></div><div class="dash-lower"><section class="panel">${panelHead("Game học tập", "game", "games")}<p class="tiny muted">Học mà chơi, chơi mà nhớ lâu.</p><div class="mini-games">${miniGames()}</div></section><section class="panel">${panelHead("Bài giảng & Tài liệu", "book", "materials")}<div class="tabs"><button class="chip active" data-nav="materials">Bài học</button><button class="chip" data-nav="materials">Đề tự kiểm tra</button><button class="chip" data-nav="materials">Tài liệu</button></div><div class="lesson-grid">${lessonCards()}</div><div class="doc-grid">${docCards()}</div></section><section class="panel">${panelHead("Hội nhóm học tập", "users", "groups")}<div class="group-list">${groupLines()}</div></section></div><div class="dash-bottom"><section class="panel">${panelHead("Tính điểm", "calc", "grades")}<div class="tabs"><button class="chip active">Điểm học phần</button></div>${gradeForm(true)}</section><section class="panel">${panelHead("Sự kiện mới nhất", "event", "events")}<div class="tabs"><button class="chip active" data-nav="events">Tất cả</button><button class="chip" data-nav="events">Học thuật</button><button class="chip" data-nav="events">Kỹ năng</button></div><div class="events-mini">${d.events
     .slice(0, 3)
     .map(
       (v) =>
@@ -472,7 +483,7 @@ function rewardsGrid(limit = 8) {
 function gamesPage() {
   const u = state.user,
     stats = state.data.stats;
-  return `<div class="games-layout"><div><section class="game-hero"><h1>Game học tập</h1><h2>Học qua trò chơi · Kiến thức không còn khô khan!</h2><div class="hero-points"><span>Nhiều chế độ game đa dạng</span><span>Tích lũy xu sau khi hoàn thành</span><span>Đổi quà học tập thật thú vị</span><span>Vừa học vừa giải trí</span></div></section><div class="game-intro"><span class="emoji">🎮</span><div><h2>Chọn chế độ game</h2><p class="tiny muted">Nhiều hình thức chơi · Phù hợp với mọi phong cách học tập</p></div></div><div class="game-grid">${state.data.games.map((g) => `<article class="game-card"><div class="game-art ${g.color}">${gameSprite(g.id)}</div><div class="game-card-body"><h3>${g.name}</h3><p>${g.description}</p><span class="badge gold">🟡 +10–50 xu / ngày</span><button class="btn" data-action="game-choose" data-id="${g.id}">Chơi ngay</button></div></article>`).join("")}</div><p class="tiny muted mt">Mỗi chế độ thưởng xu một lần mỗi ngày. Bạn có thể chơi lại để luyện tập.</p></div><aside class="game-side"><section class="panel profile-card"><div class="flex">${avatar(u.name)}<div><b class="small">${e(u.name)}</b><p class="tiny muted">${roleNames[u.role]} · Smart Student</p></div></div><div class="xp-line"><span class="badge gold">Lv. ${u.level}</span><div class="bar"><span style="width:${(u.xp % 1000) / 10}%"></span></div><span>${u.xp % 1000}/1000 XP</span></div><div class="coin-line"><div class="coin-count"><span class="coin">🟡</span>${number(u.coins)} <small>xu</small></div><button class="btn small" data-action="scroll-rewards">Đổi quà</button></div><div class="flex between"><b class="small">Chuỗi ngày học game</b><span class="tiny muted">🔥 ${gameStreak()} ngày liên tiếp</span></div><div class="week-streak">${["T2", "T3", "T4", "T5", "T6", "T7", "CN"].map((t, i) => `<div class="${playedWeekDay(i) ? "complete" : ""}"><i>✓</i>${t}</div>`).join("")}</div></section><section class="panel">${panelHead("Bảng xếp hạng", "trophy", null)}<div class="tabs"><span class="chip active">Top sinh viên · Tổng XP</span></div>${leaderboard()}</section><section class="panel">${panelHead("Nhiệm vụ game", "game", null)}${[
+  return `<div class="games-layout"><div><section class="game-hero"><div class="scene-host" data-scene="arcade"></div><div class="game-hero-copy"><h1>Game học tập</h1><h2>Ôn bài bằng 8 chế độ chơi, nhận xu mỗi ngày và đổi quà thật.</h2></div></section><div class="game-intro"><h2>Chọn chế độ</h2><p class="tiny muted">Mỗi chế độ thưởng xu một lần mỗi ngày, chơi lại để luyện tập không giới hạn.</p></div><div class="game-grid">${state.data.games.map((g) => `<article class="game-card"><div class="game-art ${g.color}">${gameSprite(g.id)}</div><div class="game-card-body"><h3>${g.name}</h3><p>${g.description}</p><span class="badge gold">+10-50 xu mỗi ngày</span><button class="btn" data-action="game-choose" data-id="${g.id}">Chơi ngay</button></div></article>`).join("")}</div></div><aside class="game-side"><section class="panel profile-card"><div class="flex">${avatar(u.name)}<div><b class="small">${e(u.name)}</b><p class="tiny muted">${roleNames[u.role]} · Smart Student</p></div></div><div class="xp-line"><span class="badge gold">Lv. ${u.level}</span><div class="bar"><span style="width:${(u.xp % 1000) / 10}%"></span></div><span>${u.xp % 1000}/1000 XP</span></div><div class="coin-line"><div class="coin-count"><span class="coin" aria-hidden="true"></span>${number(u.coins)} <small>xu</small></div><button class="btn small" data-action="scroll-rewards">Đổi quà</button></div><div class="flex between"><b class="small">Chuỗi ngày học game</b><span class="tiny muted">${gameStreak()} ngày liên tiếp</span></div><div class="week-streak">${["T2", "T3", "T4", "T5", "T6", "T7", "CN"].map((t, i) => `<div class="${playedWeekDay(i) ? "complete" : ""}"><i>✓</i>${t}</div>`).join("")}</div></section><section class="panel">${panelHead("Bảng xếp hạng", "trophy", null)}<div class="tabs"><span class="chip active">Top sinh viên · Tổng XP</span></div>${leaderboard()}</section><section class="panel">${panelHead("Nhiệm vụ game", "game", null)}${[
     ["Hoàn thành 3 lượt chơi", Math.min(stats.plays, 3), 3],
     [
       "Chơi một game Puzzle",
@@ -487,7 +498,7 @@ function gamesPage() {
     )
     .join(
       "",
-    )}</section></aside></div><div class="game-bottom"><section class="preview-game"><div class="preview-header"><span>🏆 Quiz Challenge</span><span class="badge gold">🟡 +20 xu</span></div><div class="preview-inner"><span class="tiny muted">Câu hỏi minh họa</span><h3>Trong kinh tế vi mô, giá tăng thường làm lượng cung thay đổi thế nào?</h3><div class="answer-demo correct">Ⓐ &nbsp; Giá tăng thì lượng cung tăng ✓</div><div class="answer-demo">Ⓑ &nbsp; Giá tăng thì lượng cung giảm</div><div class="answer-demo">Ⓒ &nbsp; Giá không ảnh hưởng lượng cung</div><button class="btn mt" data-action="game-choose" data-id="quiz">Bắt đầu thử thách ${icon("chevron")}</button></div></section><section class="preview-game puzzle"><div class="preview-header"><span>🧩 Puzzle Kiến Thức</span><span class="badge gold">🟡 +30 xu</span></div><div class="preview-inner"><h3>Ghép những mảnh kiến thức của bạn.</h3><div class="puzzle-demo"><div class="puzzle-piece sky">Cung</div><div class="puzzle-piece pink">Cầu</div><div class="puzzle-piece yellow">Giá cả</div><div class="puzzle-piece lavender">Thị trường</div></div><button class="btn" data-action="game-choose" data-id="puzzle">Chơi ghép kiến thức</button></div></section><section class="panel" id="rewards">${panelHead("Đổi quà", "🎁", null, `<button class="link-btn" data-action="redemptions">Lịch sử đổi quà ${icon("chevron")}</button>`)}<div class="tabs">${[
+    )}</section></aside></div><div class="game-bottom"><section class="preview-game"><div class="preview-header"><span>Quiz Challenge</span><span class="badge gold">+20 xu</span></div><div class="preview-inner"><span class="tiny muted">Câu hỏi minh họa</span><h3>Trong kinh tế vi mô, giá tăng thường làm lượng cung thay đổi thế nào?</h3><div class="answer-demo correct">Ⓐ &nbsp; Giá tăng thì lượng cung tăng ✓</div><div class="answer-demo">Ⓑ &nbsp; Giá tăng thì lượng cung giảm</div><div class="answer-demo">Ⓒ &nbsp; Giá không ảnh hưởng lượng cung</div><button class="btn mt" data-action="game-choose" data-id="quiz">Bắt đầu thử thách ${icon("chevron")}</button></div></section><section class="preview-game puzzle"><div class="preview-header"><span>Puzzle kiến thức</span><span class="badge gold">+30 xu</span></div><div class="preview-inner"><h3>Ghép những mảnh kiến thức của bạn.</h3><div class="puzzle-demo"><div class="puzzle-piece sky">Cung</div><div class="puzzle-piece pink">Cầu</div><div class="puzzle-piece yellow">Giá cả</div><div class="puzzle-piece lavender">Thị trường</div></div><button class="btn" data-action="game-choose" data-id="puzzle">Chơi ghép kiến thức</button></div></section><section class="panel" id="rewards">${panelHead("Đổi quà", "star", null, `<button class="link-btn" data-action="redemptions">Lịch sử đổi quà ${icon("chevron")}</button>`)}<div class="tabs">${[
     ["all", "Tất cả"],
     ["souvenir", "Đồ lưu niệm"],
     ["study", "Đồ học tập"],
@@ -502,18 +513,18 @@ function gamesPage() {
 }
 function aiPage() {
   return `${pageHeading("AI Học tập", "Một người bạn đồng hành trong hành trình hiểu và ghi nhớ.")}<div class="chat-layout"><aside class="panel chat-tools"><h3 class="mb">Bạn muốn làm gì?</h3>${[
-    ["summary", "🔮", "Tóm tắt kiến thức", "lavender"],
-    ["solve", "📚", "Tra cứu & giải bài", "sky"],
-    ["plan", "🗓️", "Lập kế hoạch học tập", "mint"],
-    ["analysis", "📊", "Phân tích tiến độ", "peach"],
+    ["summary", "star", "Tóm tắt kiến thức", "lavender"],
+    ["solve", "book", "Tra cứu & giải bài", "sky"],
+    ["plan", "calendar", "Lập kế hoạch học tập", "mint"],
+    ["analysis", "chart", "Phân tích tiến độ", "peach"],
   ]
     .map(
       ([v, emoji, t, c]) =>
-        `<button class="ai-tile ${c}" data-action="chat-mode" data-id="${v}"><span class="emoji">${emoji}</span><b>${state.chatMode === v ? "✓ " : ""}${t}</b></button>`,
+        `<button class="ai-tile ${c} ${state.chatMode === v ? "active" : ""}" aria-pressed="${state.chatMode === v}" data-action="chat-mode" data-id="${v}"><span class="tile-icon">${icon(emoji)}</span><b>${t}</b></button>`,
     )
     .join(
       "",
-    )}<div class="notice">${state.data.aiMode === "online" ? `Đã cấu hình ${providerName(state.data.aiProvider)}. Khi nhấn gửi, câu hỏi và tài liệu liên quan được gửi tới ${providerName(state.data.aiProvider)} để xử lý.` : "Đang dùng trợ lý tra cứu thư viện. Câu trả lời lấy từ tài liệu có sẵn; chế độ này chưa kết nối mô hình AI trực tuyến."}</div></aside><section class="panel chat-box"><div class="panel-head"><div class="ai-intro"><span class="bot-icon">🤖</span><div><h3>Chào ${e(state.user.name.split(" ").at(-1))}, mình có thể giúp gì?</h3><p class="tiny muted">Cùng học từng chút, hiểu thêm mỗi ngày.</p></div></div><button class="icon-btn" data-action="chat-clear" aria-label="Xóa cuộc trò chuyện">${icon("trash")}</button></div><div class="chat-log">${state.chat.length ? state.chat.map((m) => `<div class="chat-message ${m.role === "user" ? "user" : ""}">${e(m.text)}${m.sources?.map((s) => `<a href="#materials" data-action="material-open" data-id="${s.id}">📚 ${e(s.title)}</a>`).join("") || ""}${m.engine ? `<small>${m.engine === "online" ? providerName(m.provider) + " · AI trực tuyến" : m.engine === "library-fallback" ? aiFailureText(m.aiError) + " · Đã tra cứu thư viện" : "Nguồn: thư viện học tập cá nhân"}</small>` : ""}</div>`).join("") : `<div class="chat-message">Xin chào! Bạn có thể hỏi về cung – cầu, marketing 4P, mục tiêu SMART hoặc nhờ mình gợi ý kế hoạch học tập. ✨</div>`}</div><form class="chat-send" data-form="chat"><textarea name="message" aria-label="Câu hỏi" placeholder="Ví dụ: Tóm tắt kiến thức cung cầu…" maxlength="2000" required></textarea><button class="btn" aria-label="Gửi câu hỏi" ${state.chatPending ? "disabled" : ""}>${state.chatPending ? "Đang trả lời…" : icon("send")}</button></form></section></div>`;
+    )}<div class="notice">${state.data.aiMode === "online" ? `Đã cấu hình ${providerName(state.data.aiProvider)}. Khi nhấn gửi, câu hỏi và tài liệu liên quan được gửi tới ${providerName(state.data.aiProvider)} để xử lý.` : "Đang dùng trợ lý tra cứu thư viện. Câu trả lời lấy từ tài liệu có sẵn; chế độ này chưa kết nối mô hình AI trực tuyến."}</div></aside><section class="panel chat-box"><div class="panel-head"><div class="ai-intro"><span class="bot-icon">${icon("bot")}</span><div><h3>Chào ${e(state.user.name.split(" ").at(-1))}, mình có thể giúp gì?</h3><p class="tiny muted">Cùng học từng chút, hiểu thêm mỗi ngày.</p></div></div><button class="icon-btn" data-action="chat-clear" aria-label="Xóa cuộc trò chuyện">${icon("trash")}</button></div><div class="chat-log">${state.chat.length ? state.chat.map((m) => `<div class="chat-message ${m.role === "user" ? "user" : ""}">${e(m.text)}${m.sources?.map((s) => `<a href="#materials" data-action="material-open" data-id="${s.id}">📚 ${e(s.title)}</a>`).join("") || ""}${m.engine ? `<small>${m.engine === "online" ? providerName(m.provider) + " · AI trực tuyến" : m.engine === "library-fallback" ? aiFailureText(m.aiError) + " · Đã tra cứu thư viện" : "Nguồn: thư viện học tập cá nhân"}</small>` : ""}</div>`).join("") : `<div class="chat-message">Xin chào! Bạn có thể hỏi về cung – cầu, marketing 4P, mục tiêu SMART hoặc nhờ mình gợi ý kế hoạch học tập. ✨</div>`}</div><form class="chat-send" data-form="chat"><textarea name="message" aria-label="Câu hỏi" placeholder="Ví dụ: Tóm tắt kiến thức cung cầu…" maxlength="2000" required></textarea><button class="btn" aria-label="Gửi câu hỏi" ${state.chatPending ? "disabled" : ""}>${state.chatPending ? "Đang trả lời…" : icon("send")}</button></form></section></div>`;
 }
 function calendarPage() {
   return `${pageHeading("Lịch học & Lịch thi", "Sắp xếp thời gian để học tập chủ động hơn.", `<button class="btn" data-action="schedule-add">${icon("plus")} Thêm lịch</button>`)}<section class="panel"><div class="tabs">${[
@@ -1007,7 +1018,7 @@ document.addEventListener("click", async (event) => {
       const s = state.data.schedules.find((s) => s.id === rid);
       openModal(
         s.title,
-        `<p class="muted">${dateLabel(s.start)}<br>${timeLabel(s.start)} – ${timeLabel(s.end)}<br>📍 ${e(s.location || "Chưa có địa điểm")}</p><div class="modal-footer"><button class="btn danger" data-action="schedule-delete" data-id="${rid}">Xóa lịch</button><button class="btn" data-action="schedule-edit" data-id="${rid}">Sửa lịch</button></div>`,
+        `<p class="muted">${dateLabel(s.start)}<br>${timeLabel(s.start)}-${timeLabel(s.end)}<br>📍 ${e(s.location || "Chưa có địa điểm")}</p><div class="modal-footer"><button class="btn danger" data-action="schedule-delete" data-id="${rid}">Xóa lịch</button><button class="btn" data-action="schedule-edit" data-id="${rid}">Sửa lịch</button></div>`,
       );
     } else if (action === "schedule-edit")
       scheduleForm(state.data.schedules.find((s) => s.id === rid));
@@ -1505,7 +1516,7 @@ async function boot() {
     render();
   } catch (err) {
     $("#app").innerHTML =
-      `<div class="loading"><span class="loading-cap">☁️</span><strong>Kết nối đang gián đoạn</strong><p>${e(err.message)}</p><button class="btn" data-action="retry">Thử lại</button></div>`;
+      `<div class="loading"><span class="loading-cap">${icon("clock")}</span><strong>Kết nối đang gián đoạn</strong><p>${e(err.message)}</p><button class="btn" data-action="retry">Thử lại</button></div>`;
   }
 }
 document.addEventListener("click", (event) => {

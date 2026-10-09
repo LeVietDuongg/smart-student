@@ -1,4 +1,5 @@
 import http from "node:http";
+import { gzipSync } from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
@@ -1802,6 +1803,15 @@ const publicRoot = resolve(root, "public"),
     ".jpg": "image/jpeg",
     ".woff2": "font/woff2",
   };
+const gzipCache = new Map();
+function gzipped(file, raw) {
+  const mtime = statSync(file).mtimeMs;
+  const hit = gzipCache.get(file);
+  if (hit && hit.mtime === mtime) return hit.body;
+  const body = gzipSync(raw);
+  gzipCache.set(file, { mtime, body });
+  return body;
+}
 const server = http.createServer(async (req, res) => {
   headers(res);
   try {
@@ -1842,13 +1852,28 @@ const server = http.createServer(async (req, res) => {
       404,
       "Không tìm thấy tệp.",
     );
-    res.writeHead(200, {
-      "Content-Type": mime[extname(target)],
-      "Cache-Control": [".html", ".js", ".css"].includes(extname(target))
-        ? "no-store"
-        : "public, max-age=3600",
-    });
-    res.end(req.method === "HEAD" ? undefined : readFileSync(target));
+    const ext = extname(target);
+    // Versioned third-party files (three.js, fonts) never change in place.
+    const immutable = /^\/(vendor|fonts)\//.test(pathname);
+    const compress =
+      [".js", ".css", ".svg", ".html"].includes(ext) &&
+      /\bgzip\b/.test(req.headers["accept-encoding"] || "");
+    const responseHeaders = {
+      "Content-Type": mime[ext],
+      "Cache-Control": immutable
+        ? "public, max-age=31536000, immutable"
+        : [".html", ".js", ".css"].includes(ext)
+          ? "no-store"
+          : "public, max-age=3600",
+      Vary: "Accept-Encoding",
+    };
+    let payload = readFileSync(target);
+    if (compress) {
+      payload = gzipped(target, payload);
+      responseHeaders["Content-Encoding"] = "gzip";
+    }
+    res.writeHead(200, responseHeaders);
+    res.end(req.method === "HEAD" ? undefined : payload);
   } catch (e) {
     if (!e.status) console.error("Server error:", e.message);
     if (!res.headersSent)
