@@ -415,7 +415,8 @@ label.field { font-size: 13px; font-weight: 500; color: var(--ink); }
 .welcome-quote {
   margin: 22px 0 0;
   width: auto;
-  max-width: 26ch;
+  max-width: none;
+  text-wrap: balance;
   background: none;
   border-left: 2px solid var(--gold);
   border-radius: 0;
@@ -585,17 +586,18 @@ label.field { font-size: 13px; font-weight: 500; color: var(--ink); }
 }
 @media (max-width: 720px) {
   .nav-item.active::before { display: none; }
-  .auth-visual { min-height: 300px; padding: 22px; border-radius: var(--radius); }
+  .auth-visual { min-height: 440px; padding: 22px; border-radius: var(--radius); }
   .auth-slogan h1 { font-size: 32px; }
   .auth-slogan p { font-size: 14px; }
   .auth-form { padding: 20px 4px; }
-  .welcome-banner { min-height: 250px; padding: 22px; }
+  .welcome-banner { min-height: 340px; padding: 22px; }
   .welcome-copy, .game-hero-copy { max-width: 100%; }
-  .welcome-banner .scene-host, .game-hero .scene-host { opacity: 0.55; }
-  .game-hero { min-height: 220px; padding: 22px; }
+  .game-hero { min-height: 300px; padding: 22px; }
+  /* On phones the copy sits on top and the 3D objects below it. */
+  .welcome-banner .scene-host::after,
+  .game-hero .scene-host::after { background: linear-gradient(180deg, rgb(18 26 61 / 0.7) 10%, rgb(18 26 61 / 0) 45%); }
   .ai-tile p { display: none; }
   .quick-grid { grid-template-columns: repeat(3, 1fr); }
-  .auth-visual .scene-host { opacity: 0.7; }
 }
 @media (prefers-reduced-motion: reduce) {
   .scene-canvas { transition: none; }

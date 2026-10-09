@@ -214,7 +214,7 @@ async function mutate(path, method, body, message) {
 let scenesModule;
 function mount3D() {
   if (typeof document.querySelector !== "function" || !document.querySelector("[data-scene]")) return;
-  scenesModule ??= import("/scene3d.js?v=1.1.0").catch(() => null);
+  scenesModule ??= import("/scene3d.js?v=1.2.0").catch(() => null);
   scenesModule.then((m) => {
     if (m) m.mountScenes();
     else document.querySelectorAll("[data-scene]").forEach((el) => el.classList.add("scene-fallback"));
