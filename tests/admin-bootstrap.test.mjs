@@ -10,8 +10,8 @@ const project = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = resolve(process.env.TEST_WORK_DIR || resolve(project, "../..", "work"));
 mkdirSync(scratch, { recursive: true });
 
-async function start(extra) {
-  const dataDir = mkdtempSync(resolve(scratch, "smart-student-admin-"));
+async function start(extra, keepDir) {
+  const dataDir = keepDir || mkdtempSync(resolve(scratch, "smart-student-admin-"));
   const port = 39000 + Math.floor(Math.random() * 1000), origin = `http://127.0.0.1:${port}`;
   const proc = spawn(process.execPath, ["server.mjs"], {
     cwd: project,
@@ -25,7 +25,7 @@ async function start(extra) {
   const exited = new Promise((r) => proc.on("exit", r));
   for (let i = 0; i < 80 && !logs.includes("chạy tại") && proc.exitCode === null; i++) await delay(100);
   return { proc, origin, dataDir, logs: () => logs, exited,
-    stop: async () => { if (proc.exitCode === null) { proc.kill("SIGTERM"); await exited; } rmSync(dataDir, { recursive: true, force: true }); } };
+    stop: async () => { if (proc.exitCode === null) { proc.kill("SIGTERM"); await exited; } if (!keepDir) rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
 async function login(origin, email, password) {
@@ -60,4 +60,18 @@ test("ADMIN_PASSWORD quá ngắn làm máy chủ dừng thay vì tạo admin y�
     assert.notEqual(s.proc.exitCode, null, "server phải dừng");
     assert.notEqual(s.proc.exitCode, 0);
   } finally { await s.stop(); }
+});
+
+test("đổi ADMIN_PASSWORD rồi khởi động lại sẽ cập nhật mật khẩu admin dù database đã tồn tại", async () => {
+  const dir = mkdtempSync(resolve(scratch, "smart-student-admin-keep-"));
+  const first = "Mat-khau-cu-2026!!", second = "Mat-khau-moi-2026!!";
+  try {
+    let s = await start({ ADMIN_EMAIL: "chu@example.edu.vn", ADMIN_PASSWORD: first }, dir);
+    assert.equal((await login(s.origin, "chu@example.edu.vn", first)).status, 200);
+    await s.stop();
+    s = await start({ ADMIN_EMAIL: "chu@example.edu.vn", ADMIN_PASSWORD: second }, dir);
+    assert.equal((await login(s.origin, "chu@example.edu.vn", second)).status, 200, s.logs());
+    assert.equal((await login(s.origin, "chu@example.edu.vn", first)).status, 401);
+    await s.stop();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

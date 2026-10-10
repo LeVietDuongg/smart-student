@@ -95,6 +95,7 @@ const aiFailureText = (code) => ({
 }[code] || "Dịch vụ AI tạm thời không phản hồi");
 let state = {
   csrf: "",
+  googleClientId: null,
   user: null,
   data: null,
   route: "home",
@@ -186,7 +187,7 @@ async function api(path, { method = "GET", body } = {}) {
   });
   const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401 && path !== "/api/login") {
+    if (response.status === 401 && path !== "/api/login" && path !== "/api/google") {
       closeModal();
       state.user = null;
       state.data = null;
@@ -195,6 +196,7 @@ async function api(path, { method = "GET", body } = {}) {
       state.chatPending = false;
       const session = await fetch("/api/session").then((r) => r.json());
       state.csrf = session.csrf;
+      state.googleClientId = session.googleClientId || null;
       render();
     }
     throw new Error(data.error || "Không thể kết nối máy chủ.");
@@ -255,8 +257,72 @@ function render() {
 function renderAuth(error = "") {
   const register = state.authMode === "register";
   $("#app").innerHTML =
-    `<main class="auth-page"><section class="auth-visual"><div class="scene-host" data-scene="campus"></div>${brand()}<div class="auth-slogan"><h1>Học thông minh.<br>Sống trọn đại học.</h1><p>Lịch học, tài liệu, trợ lý AI và game ôn tập trong một nơi.</p></div></section><section class="auth-form">${brand()}<h2>${register ? "Tạo tài khoản" : "Chào mừng trở lại"}</h2><p>${register ? "Tạo tài khoản sinh viên để học, chơi và tiến bộ mỗi ngày." : "Đăng nhập để tiếp tục hành trình học tập của bạn."}</p>${error ? `<div class="error-text" role="alert">${e(error)}</div>` : ""}<form data-form="auth">${register ? '<label class="field">Họ và tên<input name="name" autocomplete="name" minlength="2" maxlength="80" placeholder="Nguyễn Minh Anh" required></label>' : ""}<label class="field">Email<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="ban@example.com" required></label><label class="field">Mật khẩu<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" ${register ? 'minlength="12"' : ""} maxlength="128" placeholder="${register ? "Ít nhất 12 ký tự" : "Nhập mật khẩu của bạn"}" required></label>${register ? '<p class="tiny muted">Tài khoản mới được cấp quyền sinh viên. Mật khẩu được bảo vệ trên máy chủ.</p>' : ""}<button class="btn w-full" type="submit">${register ? "Tạo tài khoản" : "Đăng nhập"} ${icon("chevron")}</button></form><div class="auth-switch">${register ? "Đã có tài khoản?" : "Bạn chưa có tài khoản?"} <button data-action="auth-switch">${register ? "Đăng nhập" : "Đăng ký ngay"}</button></div><div class="auth-foot">Smart Student, cổng học tập cho sinh viên.</div></section></main>`;
+    `<main class="auth-page"><section class="auth-visual"><div class="scene-host" data-scene="campus"></div>${brand()}<div class="auth-slogan"><h1>Học thông minh.<br>Sống trọn đại học.</h1><p>Lịch học, tài liệu, trợ lý AI và game ôn tập trong một nơi.</p></div></section><section class="auth-form">${brand()}<h2>${register ? "Tạo tài khoản" : "Chào mừng trở lại"}</h2><p>${register ? "Tạo tài khoản sinh viên để học, chơi và tiến bộ mỗi ngày." : "Đăng nhập để tiếp tục hành trình học tập của bạn."}</p>${error ? `<div class="error-text" role="alert">${e(error)}</div>` : ""}<form data-form="auth">${register ? '<label class="field">Họ và tên<input name="name" autocomplete="name" minlength="2" maxlength="80" placeholder="Nguyễn Minh Anh" required></label>' : ""}<label class="field">Email<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="ban@example.com" required></label><label class="field">Mật khẩu<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" ${register ? 'minlength="12"' : ""} maxlength="128" placeholder="${register ? "Ít nhất 12 ký tự" : "Nhập mật khẩu của bạn"}" required></label>${register ? '<p class="tiny muted">Tài khoản mới được cấp quyền sinh viên. Mật khẩu được bảo vệ trên máy chủ.</p>' : ""}<button class="btn w-full" type="submit">${register ? "Tạo tài khoản" : "Đăng nhập"} ${icon("chevron")}</button></form>${state.googleClientId ? '<div class="auth-divider"><span>hoặc</span></div><div id="google-btn" class="google-btn" aria-label="Đăng nhập bằng Google"></div>' : ""}<div class="auth-switch">${register ? "Đã có tài khoản?" : "Bạn chưa có tài khoản?"} <button data-action="auth-switch">${register ? "Đăng nhập" : "Đăng ký ngay"}</button></div><div class="auth-foot">Smart Student, cổng học tập cho sinh viên.</div></section></main>`;
   mount3D();
+  mountGoogle();
+}
+let googleScript;
+function mountGoogle() {
+  const host = document.getElementById("google-btn");
+  if (!host || !state.googleClientId) return;
+  googleScript ??= new Promise((resolve, reject) => {
+    const tag = document.createElement("script");
+    tag.src = "https://accounts.google.com/gsi/client";
+    tag.async = true;
+    tag.onload = resolve;
+    tag.onerror = () => {
+      googleScript = null;
+      reject(new Error("google-script"));
+    };
+    document.head.append(tag);
+  });
+  googleScript
+    .then(() => {
+      const gid = window.google?.accounts?.id;
+      if (!gid || !host.isConnected) return;
+      gid.initialize({
+        client_id: state.googleClientId,
+        callback: onGoogle,
+        ux_mode: "popup",
+      });
+      gid.renderButton(host, {
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "continue_with",
+        locale: "vi",
+        width: Math.max(200, Math.min(host.clientWidth || 320, 400)),
+      });
+    })
+    .catch(() => {
+      host.innerHTML =
+        '<p class="tiny muted">Không tải được đăng nhập Google. Bạn vẫn có thể dùng email và mật khẩu.</p>';
+    });
+}
+async function afterLogin(result) {
+  state.csrf = result.csrf;
+  state.user = result.user;
+  await refresh();
+  state.route = nav.some((n) => n[0] === location.hash.slice(1))
+    ? location.hash.slice(1)
+    : "home";
+  if (state.user.role === "admin" && location.hash === "#admin") {
+    state.route = "admin";
+    await loadAdmin();
+  }
+  render();
+}
+async function onGoogle(response) {
+  try {
+    await afterLogin(
+      await api("/api/google", {
+        method: "POST",
+        body: { credential: response.credential },
+      }),
+    );
+  } catch (err) {
+    renderAuth(err.message);
+  }
 }
 function tasksList(limit = 100) {
   return (
@@ -977,6 +1043,7 @@ document.addEventListener("click", async (event) => {
       state.admin = null;
       const session = await api("/api/session");
       state.csrf = session.csrf;
+      state.googleClientId = session.googleClientId || null;
       closeModal();
       render();
     } else if (action === "notifications") {
@@ -1221,21 +1288,12 @@ document.addEventListener("submit", async (event) => {
   if (button) button.disabled = true;
   try {
     if (kind === "auth") {
-      const result = await api(
-        state.authMode === "register" ? "/api/register" : "/api/login",
-        { method: "POST", body: b },
+      await afterLogin(
+        await api(
+          state.authMode === "register" ? "/api/register" : "/api/login",
+          { method: "POST", body: b },
+        ),
       );
-      state.csrf = result.csrf;
-      state.user = result.user;
-      await refresh();
-      state.route = nav.some((n) => n[0] === location.hash.slice(1))
-        ? location.hash.slice(1)
-        : "home";
-      if (state.user.role === "admin" && location.hash === "#admin") {
-        state.route = "admin";
-        await loadAdmin();
-      }
-      render();
     } else if (kind === "search") {
       state.query = b.query.trim();
       if (state.query) {
@@ -1508,6 +1566,7 @@ async function boot() {
     const session = await api("/api/session");
     state.csrf = session.csrf;
     state.user = session.user;
+    state.googleClientId = session.googleClientId || null;
     if (state.user) {
       await refresh();
       state.route = location.hash.slice(1) || "home";

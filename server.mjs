@@ -7,6 +7,8 @@ import {
   scrypt,
   timingSafeEqual,
   createHash,
+  createPublicKey,
+  verify as verifySignature,
 } from "node:crypto";
 import { promisify } from "node:util";
 import {
@@ -60,6 +62,14 @@ if (
     "Cấu hình production không an toàn. Trên Render: xóa APP_ORIGIN sai/localhost để dùng RENDER_EXTERNAL_URL, đặt COOKIE_SECURE=1 và SEED_DEMO=0.",
   );
 const cookieName = secure ? "__Host-smart_session" : "smart_session";
+// Đăng nhập Google (tùy chọn). Chỉ cần Client ID công khai, không cần client secret.
+const googleClientId = (process.env.GOOGLE_CLIENT_ID || "").trim();
+if (googleClientId && !/^[\w-]+(\.[\w-]+)*\.apps\.googleusercontent\.com$/.test(googleClientId))
+  throw new Error("GOOGLE_CLIENT_ID không hợp lệ (phải kết thúc bằng .apps.googleusercontent.com).");
+const googleCertsUrl =
+  process.env.GOOGLE_CERTS_URL || "https://www.googleapis.com/oauth2/v3/certs";
+// Sau proxy của Render mọi yêu cầu đều đến từ cùng một IP nội bộ, nên cần lấy IP thật.
+const trustProxy = (process.env.TRUST_PROXY ?? (production ? "1" : "0")) === "1";
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, "data"));
 mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(resolve(dataDir, "smart-student.sqlite"));
@@ -538,6 +548,77 @@ if (
   run("INSERT INTO metadata VALUES('demo-v2','1')");
 }
 
+// ADMIN_PASSWORD luôn là nguồn đúng cho tài khoản ADMIN_EMAIL: mỗi lần khởi động,
+// nếu tài khoản thiếu, bị khóa, sai quyền hoặc sai mật khẩu thì khôi phục lại.
+// Nhờ đó chủ dự án đổi biến môi trường trên Render là đăng nhập được, không cần Shell.
+if (envAdminPassword) {
+  const existing = one("SELECT * FROM users WHERE email=?", envAdminEmail);
+  if (!existing) {
+    await addUser(envAdminEmail, "Quản trị Smart Student", "admin", envAdminPassword);
+  } else if (
+    !(await passwordOK(envAdminPassword, existing.password)) ||
+    existing.role !== "admin" ||
+    !existing.active
+  ) {
+    run(
+      "UPDATE users SET password=?,role='admin',active=1 WHERE id=?",
+      await passwordHash(envAdminPassword),
+      existing.id,
+    );
+    run("DELETE FROM sessions WHERE user_id=?", existing.id);
+    audit(existing.id, "admin.env-reset", existing.id);
+  }
+}
+
+let googleKeys = { at: 0, keys: [] };
+async function googleKey(kid) {
+  const find = () => googleKeys.keys.find((k) => k.kid === kid);
+  if (!find() && now() - googleKeys.at > 60000) {
+    let r;
+    try {
+      r = await fetch(googleCertsUrl, { signal: AbortSignal.timeout(5000) });
+    } catch {
+      throw problem(502, "Không kết nối được tới Google. Vui lòng thử lại.");
+    }
+    check(r.ok, 502, "Không kết nối được tới Google. Vui lòng thử lại.");
+    googleKeys = { at: now(), keys: (await r.json()).keys || [] };
+  }
+  return find();
+}
+async function verifyGoogleToken(token) {
+  const fail = () => problem(401, "Không xác minh được tài khoản Google.");
+  check(googleClientId, 404, "Đăng nhập Google chưa được bật.");
+  if (typeof token !== "string" || token.length > 4096) throw fail();
+  const parts = token.split(".");
+  if (parts.length !== 3) throw fail();
+  let header, claims;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], "base64url").toString());
+    claims = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+  } catch {
+    throw fail();
+  }
+  if (header.alg !== "RS256" || typeof header.kid !== "string") throw fail();
+  const jwk = await googleKey(header.kid);
+  if (!jwk) throw fail();
+  const valid = verifySignature(
+    "RSA-SHA256",
+    Buffer.from(parts[0] + "." + parts[1]),
+    createPublicKey({ key: jwk, format: "jwk" }),
+    Buffer.from(parts[2], "base64url"),
+  );
+  if (
+    !valid ||
+    !["https://accounts.google.com", "accounts.google.com"].includes(claims.iss) ||
+    claims.aud !== googleClientId ||
+    !(Number(claims.exp) * 1000 > now()) ||
+    !(claims.email_verified === true || claims.email_verified === "true") ||
+    typeof claims.email !== "string"
+  )
+    throw fail();
+  return claims;
+}
+
 const limits = new Map();
 function rate(key, max, windowMs) {
   const time = now();
@@ -572,7 +653,9 @@ function headers(res) {
   );
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self'; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    googleClientId
+      ? "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data:; connect-src 'self' https://accounts.google.com/gsi/; media-src 'self'; frame-src https://www.youtube-nocookie.com https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+      : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self'; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   );
   if (secure)
     res.setHeader(
@@ -794,7 +877,13 @@ async function api(req, res, path) {
     return json(res, 200, { ok: true });
   }
   const method = req.method,
-    ip = req.socket.remoteAddress;
+    ip =
+      (trustProxy &&
+        String(req.headers["x-forwarded-for"] || "")
+          .split(",")
+          .pop()
+          .trim()) ||
+      req.socket.remoteAddress;
   rate("http:" + ip, 300, 60000);
   let sess = session(req),
     user = sess?.user_id
@@ -807,6 +896,7 @@ async function api(req, res, path) {
     return json(res, 200, {
       user: user ? safeUser(user) : null,
       csrf: sess.csrf,
+      googleClientId: googleClientId || null,
     });
   }
   if (method !== "GET") {
@@ -847,6 +937,37 @@ async function api(req, res, path) {
     check(ok && u?.active, 401, "Email hoặc mật khẩu không đúng.");
     const token = newSession(res, u.id, sess);
     audit(u.id, "account.login", u.id);
+    return json(res, 200, { user: safeUser(u), ...token });
+  }
+  if (method === "POST" && path === "/api/google") {
+    rate("auth:" + ip, 10, 15 * 60000);
+    const b = await body(req),
+      claims = await verifyGoogleToken(b.credential),
+      email = emailField(claims.email);
+    rate("email:" + email, 10, 15 * 60000);
+    const isOwner = !!process.env.ADMIN_EMAIL && email === envAdminEmail;
+    let u = one("SELECT * FROM users WHERE email=?", email);
+    if (!u) {
+      const rawName = typeof claims.name === "string" ? claims.name.trim() : "";
+      const name = (rawName.length >= 2 ? rawName : email.split("@")[0]).slice(0, 80);
+      const uid = await addUser(
+        email,
+        name.length >= 2 ? name : "Sinh viên",
+        isOwner ? "admin" : "student",
+        randomBytes(24).toString("base64url"),
+      );
+      notify(uid, "Chào mừng bạn đến với Smart Student!");
+      audit(uid, "account.google-register", uid);
+      u = one("SELECT * FROM users WHERE id=?", uid);
+    } else {
+      check(u.active, 401, "Tài khoản này đã bị khóa.");
+      if (isOwner && u.role !== "admin") {
+        run("UPDATE users SET role='admin' WHERE id=?", u.id);
+        u = one("SELECT * FROM users WHERE id=?", u.id);
+      }
+      audit(u.id, "account.google-login", u.id);
+    }
+    const token = newSession(res, u.id, sess);
     return json(res, 200, { user: safeUser(u), ...token });
   }
   check(user, 401, "Vui lòng đăng nhập để tiếp tục.");

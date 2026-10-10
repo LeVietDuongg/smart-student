@@ -105,6 +105,7 @@ Nếu sau khi khởi động, `/api/health` trả 400 `Host không hợp lệ`, 
 |---|---|
 | `ADMIN_EMAIL` | email quản trị bạn muốn dùng |
 | `ADMIN_PASSWORD` | mật khẩu mạnh 12–128 ký tự, chỉ lưu ở Render và trình quản lý mật khẩu của bạn |
+| `GOOGLE_CLIENT_ID` | (tùy chọn) Client ID OAuth dạng `…apps.googleusercontent.com` để bật nút "Tiếp tục với Google"; không phải bí mật |
 
 Mỗi lần cơ sở dữ liệu trống (lần đầu, sau redeploy/restart, hoặc sau khi dịch vụ Free ngủ 15 phút), máy chủ tạo lại quản trị viên này. Mật khẩu không được ghi ra log hay `initial-credentials.json`. Lưu ý: trên Free, `DATA_DIR` nằm trên ổ tạm (ví dụ `/tmp/smart-student`), nên tài khoản đăng ký, nội dung và xu **sẽ mất** khi dịch vụ ngủ/khởi động lại; chỉ dùng để demo. Đổi mật khẩu quản trị trong web cũng chỉ có hiệu lực đến lần khởi động lại tiếp theo.
 
@@ -178,3 +179,15 @@ Các bước công khai này chưa được thực hiện trong lần bàn giao 
 Sao lưu: chạy `node backup.mjs` trong Render Shell, dùng cùng `DATA_DIR`. Bản sao nằm trong `/var/data/smart-student/backups`. Hãy giữ thêm bản sao ở nơi độc lập và thử khôi phục trên môi trường thử nghiệm. Không dùng thao tác restore snapshot disk thay cho quy trình sao lưu/khôi phục SQLite đã kiểm tra.
 
 Mã hiện dùng một tiến trình, SQLite và giới hạn tần suất trong RAM. Tích hợp Gemini và cấu hình deploy không tự hoàn thành các phần game nâng cao, điểm rèn luyện, email khôi phục hoặc kiểm thử tải trong báo cáo trước. Đây là cấu hình để chạy dự án hiện tại, chưa phải chứng nhận an toàn vận hành quy mô lớn.
+
+## Đăng nhập bằng Google
+
+1. Vào Google Cloud Console, chọn hoặc tạo project, mở **APIs & Services > OAuth consent screen** và cấu hình màn hình đồng ý (loại External, thêm email của bạn làm Test user nếu để chế độ Testing).
+2. Mở **Credentials > Create credentials > OAuth client ID**, loại **Web application**.
+3. Ở **Authorized JavaScript origins** thêm `https://smart-student-mboo.onrender.com` (và `http://localhost:3000` nếu thử trên máy). Không cần Redirect URI và không cần client secret.
+4. Chép **Client ID** vào biến `GOOGLE_CLIENT_ID` trên Render, lưu để Render tự deploy lại.
+5. Người dùng đăng nhập lần đầu bằng Google sẽ được tạo tài khoản sinh viên. Nếu email trùng `ADMIN_EMAIL` thì tài khoản có quyền quản trị.
+
+## Lưu ý về dữ liệu trên Render Free
+
+Render Free không có ổ đĩa bền. Mỗi lần web ngủ, khởi động lại hoặc deploy, file SQLite bị xóa: tài khoản đăng ký thường, bài đăng và điểm biến mất. Tài khoản admin được tạo lại từ `ADMIN_EMAIL`/`ADMIN_PASSWORD`, người dùng Google đăng nhập lại sẽ được tạo lại nhưng mất dữ liệu cũ. Muốn giữ dữ liệu cần ổ đĩa bền (gói Starter + Persistent Disk) hoặc database bên ngoài.

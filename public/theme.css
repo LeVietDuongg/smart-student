@@ -603,3 +603,8 @@ label.field { font-size: 13px; font-weight: 500; color: var(--ink); }
   .scene-canvas { transition: none; }
   .btn, .quick-btn, .game-card, .chip, .nav-item { transition: none; }
 }
+
+/* Đăng nhập Google */
+.auth-divider{display:flex;align-items:center;gap:12px;margin:18px 0 14px;color:var(--muted,#6b7280);font-size:.8125rem}
+.auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:currentColor;opacity:.25}
+.google-btn{display:flex;justify-content:center;min-height:44px}
