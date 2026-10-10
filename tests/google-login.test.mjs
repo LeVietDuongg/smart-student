@@ -47,7 +47,7 @@ async function start(extra = {}) {
     cwd: project,
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", APP_ORIGIN: origin, DATA_DIR: dataDir,
       SEED_DEMO: "0", NODE_ENV: "test", COOKIE_SECURE: "0", AI_PROVIDER: "library",
-      ADMIN_EMAIL: "", ADMIN_PASSWORD: "", GOOGLE_CLIENT_ID: clientId, GOOGLE_CERTS_URL: certsUrl, ...extra },
+      ADMIN_EMAIL: "", ADMIN_PASSWORD: "", TURSO_DATABASE_URL: "", TURSO_AUTH_TOKEN: "", GOOGLE_CLIENT_ID: clientId, GOOGLE_CERTS_URL: certsUrl, ...extra },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let logs = "";

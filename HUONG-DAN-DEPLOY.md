@@ -188,6 +188,18 @@ Mã hiện dùng một tiến trình, SQLite và giới hạn tần suất trong
 4. Chép **Client ID** vào biến `GOOGLE_CLIENT_ID` trên Render, lưu để Render tự deploy lại.
 5. Người dùng đăng nhập lần đầu bằng Google sẽ được tạo tài khoản sinh viên. Nếu email trùng `ADMIN_EMAIL` thì tài khoản có quyền quản trị.
 
+## Lưu dữ liệu bền vững trên Render Free bằng Turso
+
+Render Free không có ổ đĩa bền: mỗi lần web ngủ, khởi động lại hoặc deploy, file SQLite trong `DATA_DIR` bị xóa. Để giữ tài khoản và dữ liệu, dùng Turso (SQLite trên đám mây, gói miễn phí):
+
+1. Đăng ký tại https://app.turso.tech (có thể đăng nhập bằng GitHub).
+2. Tạo database mới, chọn vùng gần Singapore nhất.
+3. Mở database, chép **URL** dạng `libsql://ten-db-ten-ban.turso.io`, rồi tạo **token** (Create Token, quyền Read & Write, không hết hạn).
+4. Trên Render, thêm `TURSO_DATABASE_URL` (URL ở trên) và `TURSO_AUTH_TOKEN` (token, chỉ dán vào Render, không dán vào chat hay code). Lưu để deploy lại.
+5. Kiểm tra log Render: dòng `Smart Student chạy tại ... (database: Turso, dữ liệu bền vững)`. Lần đầu sẽ thấy thêm `Tài khoản ban đầu`; các lần deploy sau không còn dòng đó nữa vì dữ liệu đã được giữ.
+
+Nếu token sai hoặc hết hạn, server dừng với lỗi `Turso HTTP 401` thay vì chạy với database rỗng.
+
 ## Lưu ý về dữ liệu trên Render Free
 
 Render Free không có ổ đĩa bền. Mỗi lần web ngủ, khởi động lại hoặc deploy, file SQLite bị xóa: tài khoản đăng ký thường, bài đăng và điểm biến mất. Tài khoản admin được tạo lại từ `ADMIN_EMAIL`/`ADMIN_PASSWORD`, người dùng Google đăng nhập lại sẽ được tạo lại nhưng mất dữ liệu cũ. Muốn giữ dữ liệu cần ổ đĩa bền (gói Starter + Persistent Disk) hoặc database bên ngoài.

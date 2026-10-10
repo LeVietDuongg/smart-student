@@ -1,6 +1,6 @@
 import http from "node:http";
 import { gzipSync } from "node:zlib";
-import { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "./db.mjs";
 import {
   randomBytes,
   randomUUID,
@@ -72,8 +72,13 @@ const googleCertsUrl =
 const trustProxy = (process.env.TRUST_PROXY ?? (production ? "1" : "0")) === "1";
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, "data"));
 mkdirSync(dataDir, { recursive: true });
-const db = new DatabaseSync(resolve(dataDir, "smart-student.sqlite"));
-db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
+// Có TURSO_DATABASE_URL thì dữ liệu nằm trên Turso (bền vững); không có thì dùng file SQLite trong DATA_DIR.
+const db = openDatabase({
+  file: resolve(dataDir, "smart-student.sqlite"),
+  url: (process.env.TURSO_DATABASE_URL || "").trim() || null,
+  authToken: (process.env.TURSO_AUTH_TOKEN || "").trim() || null,
+});
+await db.exec(`
 CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,password TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('student','teacher','admin')),active INTEGER NOT NULL DEFAULT 1,coins INTEGER NOT NULL DEFAULT 0 CHECK(coins>=0),xp INTEGER NOT NULL DEFAULT 0,settings TEXT NOT NULL DEFAULT '{}',created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY,user_id TEXT REFERENCES users(id) ON DELETE CASCADE,csrf TEXT NOT NULL,created INTEGER NOT NULL,touched INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,title TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0,created INTEGER NOT NULL);
@@ -97,9 +102,10 @@ CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS task_owner ON tasks(user_id); CREATE INDEX IF NOT EXISTS record_section ON records(section);
 CREATE INDEX IF NOT EXISTS attempt_owner ON attempts(user_id,started); CREATE INDEX IF NOT EXISTS session_user ON sessions(user_id);
 `);
-const q = (sql, ...args) => db.prepare(sql).all(...args),
-  one = (sql, ...args) => db.prepare(sql).get(...args),
-  run = (sql, ...args) => db.prepare(sql).run(...args);
+const { q, one, run, transaction } = db;
+const each = async (list, fn) => {
+  for (let i = 0; i < list.length; i++) await fn(list[i], i);
+};
 const now = () => Date.now(),
   id = () => randomUUID(),
   hash = (t) => createHash("sha256").update(t).digest("hex");
@@ -140,8 +146,8 @@ const safeUser = (u) => ({
   level: Math.floor(u.xp / 1000) + 1,
   settings: JSON.parse(u.settings),
 });
-const audit = (actor, action, target = "") =>
-  run(
+const audit = async (actor, action, target = "") =>
+  await run(
     "INSERT INTO audit VALUES(?,?,?,?,?)",
     id(),
     actor || null,
@@ -149,8 +155,8 @@ const audit = (actor, action, target = "") =>
     target,
     now(),
   );
-const notify = (user, title) =>
-  run(
+const notify = async (user, title) =>
+  await run(
     "INSERT INTO notifications VALUES(?,?,?,?,?)",
     id(),
     user,
@@ -158,17 +164,6 @@ const notify = (user, title) =>
     0,
     now(),
   );
-const transaction = (fn) => {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const r = fn();
-    db.exec("COMMIT");
-    return r;
-  } catch (e) {
-    db.exec("ROLLBACK");
-    throw e;
-  }
-};
 const problem = (status, message) =>
   Object.assign(new Error(message), { status });
 const check = (condition, status, message) => {
@@ -240,11 +235,11 @@ const addUser = async (email, name, role, password) => {
   const uid = id(),
     encoded = await passwordHash(password);
   check(
-    !one("SELECT id FROM users WHERE email=?", email),
+    !await one("SELECT id FROM users WHERE email=?", email),
     409,
     "Email này đã được sử dụng.",
   );
-  run(
+  await run(
     "INSERT INTO users(id,email,name,password,role,created) VALUES(?,?,?,?,?,?)",
     uid,
     email,
@@ -295,7 +290,7 @@ const envAdminEmail = process.env.ADMIN_EMAIL
 const envAdminPassword = process.env.ADMIN_PASSWORD
   ? validatePassword(process.env.ADMIN_PASSWORD)
   : null;
-if (!one("SELECT id FROM users LIMIT 1")) {
+if (!await one("SELECT id FROM users LIMIT 1")) {
   const credentials = [];
   const demo = seedDemo;
   for (const [email, name, role] of demo
@@ -314,8 +309,8 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         : { email, password, role },
     );
     if (role === "student") {
-      run("UPDATE users SET coins=2350,xp=450 WHERE id=?", uid);
-      run(
+      await run("UPDATE users SET coins=2350,xp=450 WHERE id=?", uid);
+      await run(
         "INSERT INTO ledger VALUES(?,?,?,?,?)",
         id(),
         uid,
@@ -336,10 +331,10 @@ if (!one("SELECT id FROM users LIMIT 1")) {
       ". Mật khẩu không in ra log.",
   );
   if (demo) {
-    const teacher = one("SELECT id FROM users WHERE role='teacher'").id,
-      student = one("SELECT id FROM users WHERE role='student'").id;
-    materials.forEach((m) =>
-      run(
+    const teacher = (await one("SELECT id FROM users WHERE role='teacher'")).id,
+      student = (await one("SELECT id FROM users WHERE role='student'")).id;
+    await each(materials, async (m) =>
+      await run(
         "INSERT INTO records VALUES(?,?,?,?,?)",
         id(),
         "materials",
@@ -348,7 +343,7 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         now(),
       ),
     );
-    [
+    await each([
       [
         "Kinh tế vi mô – K64",
         "Kinh tế vi mô",
@@ -373,9 +368,9 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         "Cùng nhau vượt qua mùa thi thật tự tin.",
         "📖",
       ],
-    ].forEach(([title, subject, description, icon]) => {
+    ], async ([title, subject, description, icon]) => {
       const gid = id();
-      run(
+      await run(
         "INSERT INTO records VALUES(?,?,?,?,?)",
         gid,
         "groups",
@@ -383,9 +378,9 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         JSON.stringify({ title, subject, description, icon }),
         now(),
       );
-      run("INSERT INTO memberships VALUES(?,?)", teacher, gid);
+      await run("INSERT INTO memberships VALUES(?,?)", teacher, gid);
     });
-    [
+    await each([
       [
         "Workshop: Kỹ năng thuyết trình",
         "Kỹ năng",
@@ -407,11 +402,11 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         "Lắng nghe kinh nghiệm xây dựng dự án đầu tiên.",
         "🚀",
       ],
-    ].forEach(([title, category, location, description, icon], i) => {
+    ], async ([title, category, location, description, icon], i) => {
       const date =
         new Date(now() + (i + 3) * 86400000).toISOString().slice(0, 10) +
         "T09:00";
-      run(
+      await run(
         "INSERT INTO records VALUES(?,?,?,?,?)",
         id(),
         "events",
@@ -428,14 +423,14 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         now(),
       );
     });
-    [
+    await each([
       "Làm bài tập Marketing",
       "Đọc tài liệu Quản trị học",
       "Chuẩn bị thuyết trình nhóm",
       "Ôn tập Quiz Kinh tế vi mô",
       "Xem lại bài giảng buổi 5",
-    ].forEach((title, i) =>
-      run(
+    ], async (title, i) =>
+      await run(
         "INSERT INTO tasks VALUES(?,?,?,?,?)",
         id(),
         student,
@@ -447,7 +442,7 @@ if (!one("SELECT id FROM users LIMIT 1")) {
     const monday = new Date(day() + "T00:00:00+07:00");
     const d = monday.getDay();
     monday.setDate(monday.getDate() - ((d + 6) % 7) + (d === 0 ? 7 : 0));
-    [
+    await each([
       ["Kinh tế vi mô", "class", 0, "09:00", "11:00", "P.101"],
       ["Marketing căn bản", "class", 2, "07:30", "09:00", "P.203"],
       ["Tin học ứng dụng", "class", 1, "13:00", "14:30", "Lab 2"],
@@ -455,13 +450,13 @@ if (!one("SELECT id FROM users LIMIT 1")) {
       ["Tiếng Anh", "class", 4, "10:00", "11:30", "P.301"],
       ["Thảo luận nhóm", "deadline", 3, "15:00", "16:00", "Thư viện"],
       ["Ôn thi giữa kỳ", "exam", 4, "17:00", "18:30", "P.105"],
-    ].forEach(([title, kind, offset, s, e, location]) => {
+    ], async ([title, kind, offset, s, e, location]) => {
       const date = new Date(monday);
       date.setDate(date.getDate() + offset);
       const dateStr = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Ho_Chi_Minh",
       }).format(date);
-      run(
+      await run(
         "INSERT INTO schedules VALUES(?,?,?,?,?,?,?)",
         id(),
         student,
@@ -472,18 +467,18 @@ if (!one("SELECT id FROM users LIMIT 1")) {
         location,
       );
     });
-    notify(student, "Chào mừng bạn đến với Smart Student!");
-    notify(student, "Bộ câu hỏi ôn tập mới đã sẵn sàng.");
+    await notify(student, "Chào mừng bạn đến với Smart Student!");
+    await notify(student, "Bộ câu hỏi ôn tập mới đã sẵn sàng.");
   }
-  rewardSeed.forEach((r) =>
-    run("INSERT INTO rewards VALUES(?,?,?,?,?,?)", id(), ...r),
+  await each(rewardSeed, async (r) =>
+    await run("INSERT INTO rewards VALUES(?,?,?,?,?,?)", id(), ...r),
   );
 }
 if (
   seedDemo &&
-  !one("SELECT value FROM metadata WHERE key='demo-v2'")
+  !await one("SELECT value FROM metadata WHERE key='demo-v2'")
 ) {
-  const main = one("SELECT id FROM users WHERE email='minhanh@smart.edu.vn'");
+  const main = await one("SELECT id FROM users WHERE email='minhanh@smart.edu.vn'");
   if (main) {
     const demoStudents = [];
     for (const [i, name, xp] of [
@@ -493,7 +488,7 @@ if (
       [4, "Đỗ Khánh Linh", 3720],
     ]) {
       const email = `student${i}@demo.smart.local`;
-      let u = one("SELECT id FROM users WHERE email=?", email);
+      let u = await one("SELECT id FROM users WHERE email=?", email);
       const uid =
         u?.id ||
         (await addUser(
@@ -502,7 +497,7 @@ if (
           "student",
           randomBytes(24).toString("base64url"),
         ));
-      run("UPDATE users SET xp=? WHERE id=?", xp, uid);
+      await run("UPDATE users SET xp=? WHERE id=?", xp, uid);
       demoStudents.push(uid);
     }
     for (const [i, name, subject] of [
@@ -510,7 +505,7 @@ if (
       [3, "PGS. Nguyễn Văn Nam", "Quản trị học"],
     ]) {
       const email = `teacher${i}@demo.smart.local`;
-      const u = one("SELECT id FROM users WHERE email=?", email);
+      const u = await one("SELECT id FROM users WHERE email=?", email);
       const uid =
         u?.id ||
         (await addUser(
@@ -519,7 +514,7 @@ if (
           "teacher",
           randomBytes(24).toString("base64url"),
         ));
-      run(
+      await run(
         "UPDATE users SET settings=? WHERE id=?",
         JSON.stringify({
           subject,
@@ -528,9 +523,9 @@ if (
         uid,
       );
     }
-    q("SELECT id FROM users WHERE role='teacher'").forEach((t) =>
-      demoStudents.forEach((s, i) =>
-        run(
+    await each(await q("SELECT id FROM users WHERE role='teacher'"), async (t) =>
+      await each(demoStudents, async (s, i) =>
+        await run(
           "INSERT OR IGNORE INTO ratings VALUES(?,?,?)",
           s,
           t.id,
@@ -538,21 +533,21 @@ if (
         ),
       ),
     );
-    run("UPDATE users SET xp=xp+4000 WHERE id=?", main.id);
-    audit(
+    await run("UPDATE users SET xp=xp+4000 WHERE id=?", main.id);
+    await audit(
       null,
       "demo.seed",
       "Dữ liệu minh họa cho bảng xếp hạng và giảng viên",
     );
   }
-  run("INSERT INTO metadata VALUES('demo-v2','1')");
+  await run("INSERT INTO metadata VALUES('demo-v2','1')");
 }
 
 // ADMIN_PASSWORD luôn là nguồn đúng cho tài khoản ADMIN_EMAIL: mỗi lần khởi động,
 // nếu tài khoản thiếu, bị khóa, sai quyền hoặc sai mật khẩu thì khôi phục lại.
 // Nhờ đó chủ dự án đổi biến môi trường trên Render là đăng nhập được, không cần Shell.
 if (envAdminPassword) {
-  const existing = one("SELECT * FROM users WHERE email=?", envAdminEmail);
+  const existing = await one("SELECT * FROM users WHERE email=?", envAdminEmail);
   if (!existing) {
     await addUser(envAdminEmail, "Quản trị Smart Student", "admin", envAdminPassword);
   } else if (
@@ -560,13 +555,13 @@ if (envAdminPassword) {
     existing.role !== "admin" ||
     !existing.active
   ) {
-    run(
+    await run(
       "UPDATE users SET password=?,role='admin',active=1 WHERE id=?",
       await passwordHash(envAdminPassword),
       existing.id,
     );
-    run("DELETE FROM sessions WHERE user_id=?", existing.id);
-    audit(existing.id, "admin.env-reset", existing.id);
+    await run("DELETE FROM sessions WHERE user_id=?", existing.id);
+    await audit(existing.id, "admin.env-reset", existing.id);
   }
 }
 
@@ -634,14 +629,14 @@ function rate(key, max, windowMs) {
     "Bạn thao tác quá nhanh. Vui lòng thử lại sau.",
   );
 }
-setInterval(() => {
+setInterval(async () => {
   const time = now();
   for (const [k, v] of limits) if (time - v.start > 3600000) limits.delete(k);
-  run(
+  await run(
     "DELETE FROM sessions WHERE created<? OR touched<?",
     time - 8 * 3600000,
     time - 30 * 60000,
-  );
+  ).catch((e) => console.error("Dọn phiên thất bại:", e.message));
 }, 60000).unref();
 function headers(res) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -670,27 +665,27 @@ const json = (res, status, body) => {
   });
   res.end(JSON.stringify(body));
 };
-function session(req) {
+async function session(req) {
   const cookies = Object.fromEntries(
     (req.headers.cookie || "").split(";").map((x) => x.trim().split("=")),
   );
   const raw = cookies[cookieName];
   if (!raw || !/^[a-zA-Z0-9_-]{43}$/.test(raw)) return null;
-  const row = one("SELECT * FROM sessions WHERE token=?", hash(raw));
+  const row = await one("SELECT * FROM sessions WHERE token=?", hash(raw));
   if (
     !row ||
     now() - row.created > 8 * 3600000 ||
     now() - row.touched > 30 * 60000
   )
     return null;
-  run("UPDATE sessions SET touched=? WHERE token=?", now(), row.token);
+  await run("UPDATE sessions SET touched=? WHERE token=?", now(), row.token);
   return row;
 }
-function newSession(res, user = null, previous = null) {
-  if (previous) run("DELETE FROM sessions WHERE token=?", previous.token);
+async function newSession(res, user = null, previous = null) {
+  if (previous) await run("DELETE FROM sessions WHERE token=?", previous.token);
   const raw = randomBytes(32).toString("base64url"),
     csrf = randomBytes(32).toString("base64url");
-  run(
+  await run(
     "INSERT INTO sessions VALUES(?,?,?,?,?)",
     hash(raw),
     user,
@@ -745,11 +740,11 @@ function record(r) {
     created: r.created,
   };
 }
-function records(section, user) {
-  return q(
+async function records(section, user) {
+  return (await q(
     "SELECT * FROM records WHERE section=? ORDER BY created DESC",
     section,
-  )
+  ))
     .map(record)
     .filter(
       (r) =>
@@ -759,97 +754,97 @@ function records(section, user) {
         user.role === "admin",
     );
 }
-function notifyAll(title) {
-  q("SELECT id FROM users WHERE active=1").forEach((u) => notify(u.id, title));
+async function notifyAll(title) {
+  await each(await q("SELECT id FROM users WHERE active=1"), async (u) => await notify(u.id, title));
 }
-function bootstrap(user) {
-  const stats = one(
+async function bootstrap(user) {
+  const stats = await one(
     "SELECT count(*) as plays,COALESCE(sum(score),0) as correct,COALESCE(sum(reward),0) as earned FROM attempts WHERE user_id=? AND finished IS NOT NULL",
     user.id,
   );
-  const activity = q(
+  const activity = await q(
     "SELECT day,seconds FROM activity WHERE user_id=? AND day>=? ORDER BY day DESC LIMIT 7",
     user.id,
     new Date(now() - 6 * 86400000).toLocaleDateString("en-CA", {
       timeZone: "Asia/Ho_Chi_Minh",
     }),
   );
-  const gameDays = q(
+  const gameDays = (await q(
     "SELECT DISTINCT strftime('%Y-%m-%d',finished/1000,'unixepoch','+7 hours') AS day FROM attempts WHERE user_id=? AND finished IS NOT NULL AND score>0 AND finished>? ORDER BY day DESC",
     user.id,
     now() - 90 * 86400000,
-  ).map((r) => r.day);
+  )).map((r) => r.day);
   return {
     user: safeUser(user),
     today: day(),
-    tasks: q("SELECT * FROM tasks WHERE user_id=? ORDER BY created", user.id),
-    schedules: q(
+    tasks: await q("SELECT * FROM tasks WHERE user_id=? ORDER BY created", user.id),
+    schedules: await q(
       "SELECT * FROM schedules WHERE user_id=? ORDER BY start",
       user.id,
     ),
-    grades: q(
+    grades: (await q(
       "SELECT * FROM grades WHERE user_id=? ORDER BY created DESC",
       user.id,
-    ).map((g) => ({ ...g, values: JSON.parse(g.values_json) })),
-    materials: records("materials", user),
-    groups: records("groups", user).map((g) => ({
+    )).map((g) => ({ ...g, values: JSON.parse(g.values_json) })),
+    materials: await records("materials", user),
+    groups: (await Promise.all((await records("groups", user)).map(async (g) => ({
       ...g,
-      members: one(
+      members: (await one(
         "SELECT count(*) as n FROM memberships WHERE group_id=?",
         g.id,
-      ).n,
-      joined: !!one(
+      )).n,
+      joined: !!await one(
         "SELECT 1 FROM memberships WHERE user_id=? AND group_id=?",
         user.id,
         g.id,
       ),
-    })),
-    events: records("events", user).map((e) => ({
+    })))),
+    events: (await Promise.all((await records("events", user)).map(async (e) => ({
       ...e,
-      registered: !!one(
+      registered: !!await one(
         "SELECT 1 FROM registrations WHERE user_id=? AND event_id=?",
         user.id,
         e.id,
       ),
-      attendees: one(
+      attendees: (await one(
         "SELECT count(*) as n FROM registrations WHERE event_id=?",
         e.id,
-      ).n,
-    })),
-    teachers: q("SELECT * FROM users WHERE role='teacher' AND active=1").map(
-      (t) => ({
+      )).n,
+    })))),
+    teachers: (await Promise.all((await q("SELECT * FROM users WHERE role='teacher' AND active=1")).map(
+      async (t) => ({
         id: t.id,
         name: t.name,
         subject: JSON.parse(t.settings).subject || "Kinh tế vi mô",
         bio:
           JSON.parse(t.settings).bio ||
           "Giảng viên đồng hành cùng sinh viên trong học tập và nghiên cứu.",
-        rating: one(
+        rating: await one(
           "SELECT round(avg(value),1) as avg,count(*) as n FROM ratings WHERE teacher_id=?",
           t.id,
         ),
         myRating:
-          one(
+          (await one(
             "SELECT value FROM ratings WHERE user_id=? AND teacher_id=?",
             user.id,
             t.id,
-          )?.value || 0,
+          ))?.value || 0,
       }),
-    ),
+    ))),
     games: gameModes,
-    rewards: q("SELECT * FROM rewards ORDER BY rowid"),
-    redemptions: q(
+    rewards: await q("SELECT * FROM rewards ORDER BY rowid"),
+    redemptions: await q(
       "SELECT r.*,w.title,w.icon FROM redemptions r JOIN rewards w ON w.id=r.reward_id WHERE user_id=? ORDER BY created DESC",
       user.id,
     ),
-    leaderboard: q(
+    leaderboard: await q(
       "SELECT id,name,xp FROM users WHERE role='student' AND active=1 ORDER BY xp DESC LIMIT 10",
     ),
-    progress: q(
+    progress: await q(
       "SELECT material_id,done FROM progress WHERE user_id=?",
       user.id,
     ),
-    notifications: q(
+    notifications: await q(
       "SELECT * FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT 30",
       user.id,
     ),
@@ -857,11 +852,11 @@ function bootstrap(user) {
       ...stats,
       activity,
       gameDays,
-      ledger: q(
+      ledger: await q(
         "SELECT amount,reason,created FROM ledger WHERE user_id=? ORDER BY created DESC LIMIT 20",
         user.id,
       ),
-      attempts: q(
+      attempts: await q(
         "SELECT mode,score,reward,finished FROM attempts WHERE user_id=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT 20",
         user.id,
       ),
@@ -873,7 +868,7 @@ function bootstrap(user) {
 
 async function api(req, res, path) {
   if (req.method === "GET" && path === "/api/health") {
-    one("SELECT 1 as ok");
+    await one("SELECT 1 as ok");
     return json(res, 200, { ok: true });
   }
   const method = req.method,
@@ -885,13 +880,13 @@ async function api(req, res, path) {
           .trim()) ||
       req.socket.remoteAddress;
   rate("http:" + ip, 300, 60000);
-  let sess = session(req),
+  let sess = await session(req),
     user = sess?.user_id
-      ? one("SELECT * FROM users WHERE id=? AND active=1", sess.user_id)
+      ? await one("SELECT * FROM users WHERE id=? AND active=1", sess.user_id)
       : null;
   if (method === "GET" && path === "/api/session") {
     if (!sess || (sess.user_id && !user)) {
-      sess = newSession(res, null, sess);
+      sess = await newSession(res, null, sess);
     }
     return json(res, 200, {
       user: user ? safeUser(user) : null,
@@ -918,25 +913,25 @@ async function api(req, res, path) {
       const name = textField(b.name, "Họ tên", 80, 2),
         password = validatePassword(b.password);
       check(
-        !one("SELECT id FROM users WHERE email=?", email),
+        !await one("SELECT id FROM users WHERE email=?", email),
         409,
         "Email này đã được sử dụng.",
       );
       const uid = await addUser(email, name, "student", password);
-      const token = newSession(res, uid, sess);
-      notify(uid, "Chào mừng bạn đến với Smart Student!");
-      audit(uid, "account.register", uid);
+      const token = await newSession(res, uid, sess);
+      await notify(uid, "Chào mừng bạn đến với Smart Student!");
+      await audit(uid, "account.register", uid);
       return json(res, 201, {
-        user: safeUser(one("SELECT * FROM users WHERE id=?", uid)),
+        user: safeUser(await one("SELECT * FROM users WHERE id=?", uid)),
         ...token,
       });
     }
     const p = passwordInput(b.password),
-      u = one("SELECT * FROM users WHERE email=?", email),
+      u = await one("SELECT * FROM users WHERE email=?", email),
       ok = await passwordOK(p, u?.password || dummyHash);
     check(ok && u?.active, 401, "Email hoặc mật khẩu không đúng.");
-    const token = newSession(res, u.id, sess);
-    audit(u.id, "account.login", u.id);
+    const token = await newSession(res, u.id, sess);
+    await audit(u.id, "account.login", u.id);
     return json(res, 200, { user: safeUser(u), ...token });
   }
   if (method === "POST" && path === "/api/google") {
@@ -946,7 +941,7 @@ async function api(req, res, path) {
       email = emailField(claims.email);
     rate("email:" + email, 10, 15 * 60000);
     const isOwner = !!process.env.ADMIN_EMAIL && email === envAdminEmail;
-    let u = one("SELECT * FROM users WHERE email=?", email);
+    let u = await one("SELECT * FROM users WHERE email=?", email);
     if (!u) {
       const rawName = typeof claims.name === "string" ? claims.name.trim() : "";
       const name = (rawName.length >= 2 ? rawName : email.split("@")[0]).slice(0, 80);
@@ -956,23 +951,23 @@ async function api(req, res, path) {
         isOwner ? "admin" : "student",
         randomBytes(24).toString("base64url"),
       );
-      notify(uid, "Chào mừng bạn đến với Smart Student!");
-      audit(uid, "account.google-register", uid);
-      u = one("SELECT * FROM users WHERE id=?", uid);
+      await notify(uid, "Chào mừng bạn đến với Smart Student!");
+      await audit(uid, "account.google-register", uid);
+      u = await one("SELECT * FROM users WHERE id=?", uid);
     } else {
       check(u.active, 401, "Tài khoản này đã bị khóa.");
       if (isOwner && u.role !== "admin") {
-        run("UPDATE users SET role='admin' WHERE id=?", u.id);
-        u = one("SELECT * FROM users WHERE id=?", u.id);
+        await run("UPDATE users SET role='admin' WHERE id=?", u.id);
+        u = await one("SELECT * FROM users WHERE id=?", u.id);
       }
-      audit(u.id, "account.google-login", u.id);
+      await audit(u.id, "account.google-login", u.id);
     }
-    const token = newSession(res, u.id, sess);
+    const token = await newSession(res, u.id, sess);
     return json(res, 200, { user: safeUser(u), ...token });
   }
   check(user, 401, "Vui lòng đăng nhập để tiếp tục.");
   if (method === "POST" && path === "/api/logout") {
-    run("DELETE FROM sessions WHERE token=?", sess.token);
+    await run("DELETE FROM sessions WHERE token=?", sess.token);
     res.setHeader(
       "Set-Cookie",
       `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}`,
@@ -980,7 +975,7 @@ async function api(req, res, path) {
     return json(res, 200, { ok: true });
   }
   if (method === "GET" && path === "/api/bootstrap")
-    return json(res, 200, bootstrap(user));
+    return json(res, 200, await bootstrap(user));
   if (method === "POST" && path === "/api/profile") {
     const b = await body(req),
       name = textField(b.name, "Họ tên", 80, 2);
@@ -990,7 +985,7 @@ async function api(req, res, path) {
       bio: textField(b.bio || "", "Giới thiệu", 1000, 0),
       notifications: b.notifications !== false,
     };
-    run(
+    await run(
       "UPDATE users SET name=?,settings=? WHERE id=?",
       name,
       JSON.stringify(settings),
@@ -1006,24 +1001,24 @@ async function api(req, res, path) {
       400,
       "Mật khẩu hiện tại không đúng.",
     );
-    run(
+    await run(
       "UPDATE users SET password=? WHERE id=?",
       await passwordHash(b.password),
       user.id,
     );
-    run("DELETE FROM sessions WHERE user_id=?", user.id);
-    const token = newSession(res, user.id);
-    audit(user.id, "account.password", user.id);
+    await run("DELETE FROM sessions WHERE user_id=?", user.id);
+    const token = await newSession(res, user.id);
+    await audit(user.id, "account.password", user.id);
     return json(res, 200, token);
   }
   if (method === "POST" && path === "/api/notifications/read") {
-    run("UPDATE notifications SET seen=1 WHERE user_id=?", user.id);
+    await run("UPDATE notifications SET seen=1 WHERE user_id=?", user.id);
     return json(res, 200, { ok: true });
   }
   if (path === "/api/tasks" && method === "POST") {
     const b = await body(req);
     const tid = id();
-    run(
+    await run(
       "INSERT INTO tasks VALUES(?,?,?,?,?)",
       tid,
       user.id,
@@ -1035,17 +1030,17 @@ async function api(req, res, path) {
   }
   const taskMatch = path.match(/^\/api\/tasks\/([a-f0-9-]+)$/);
   if (taskMatch && ["PATCH", "DELETE"].includes(method)) {
-    const t = one(
+    const t = await one(
       "SELECT * FROM tasks WHERE id=? AND user_id=?",
       taskMatch[1],
       user.id,
     );
     check(t, 404, "Không tìm thấy công việc.");
-    if (method === "DELETE") run("DELETE FROM tasks WHERE id=?", t.id);
+    if (method === "DELETE") await run("DELETE FROM tasks WHERE id=?", t.id);
     else {
       const b = await body(req);
       check(typeof b.done === "boolean", 400, "Trạng thái không hợp lệ.");
-      run(
+      await run(
         "UPDATE tasks SET done=?,title=? WHERE id=?",
         b.done ? 1 : 0,
         b.title === undefined ? t.title : textField(b.title, "Công việc"),
@@ -1073,11 +1068,11 @@ async function api(req, res, path) {
       location = textField(b.location || "", "Địa điểm", 100, 0);
     if (method === "PATCH") {
       check(
-        one("SELECT id FROM schedules WHERE id=? AND user_id=?", sid, user.id),
+        await one("SELECT id FROM schedules WHERE id=? AND user_id=?", sid, user.id),
         404,
         "Không tìm thấy lịch.",
       );
-      run(
+      await run(
         "UPDATE schedules SET title=?,kind=?,start=?,end=?,location=? WHERE id=? AND user_id=?",
         title,
         kind,
@@ -1088,7 +1083,7 @@ async function api(req, res, path) {
         user.id,
       );
     } else
-      run(
+      await run(
         "INSERT INTO schedules VALUES(?,?,?,?,?,?,?)",
         sid,
         user.id,
@@ -1102,7 +1097,7 @@ async function api(req, res, path) {
   }
   const scheduleMatch = path.match(/^\/api\/schedules\/([a-f0-9-]+)$/);
   if (scheduleMatch && method === "DELETE") {
-    const r = run(
+    const r = await run(
       "DELETE FROM schedules WHERE id=? AND user_id=?",
       scheduleMatch[1],
       user.id,
@@ -1137,7 +1132,7 @@ async function api(req, res, path) {
       Math.round(
         b.scores.reduce((a, v, i) => a + (v * b.weights[i]) / 100, 0) * 100,
       ) / 100;
-    run(
+    await run(
       "INSERT INTO grades VALUES(?,?,?,?,?,?)",
       id(),
       user.id,
@@ -1151,7 +1146,7 @@ async function api(req, res, path) {
   const gradeMatch = path.match(/^\/api\/grades\/([a-f0-9-]+)$/);
   if (gradeMatch && method === "DELETE") {
     check(
-      run("DELETE FROM grades WHERE id=? AND user_id=?", gradeMatch[1], user.id)
+      (await run("DELETE FROM grades WHERE id=? AND user_id=?", gradeMatch[1], user.id))
         .changes,
       404,
       "Không tìm thấy kết quả.",
@@ -1165,7 +1160,7 @@ async function api(req, res, path) {
   ) {
     const b = await body(req),
       existing = recordEdit
-        ? one("SELECT * FROM records WHERE id=?", recordEdit[1])
+        ? await one("SELECT * FROM records WHERE id=?", recordEdit[1])
         : null;
     if (recordEdit) {
       check(existing, 404, "Không tìm thấy nội dung.");
@@ -1223,18 +1218,18 @@ async function api(req, res, path) {
       if (section === "events")
         check(
           payload.capacity >=
-            one("SELECT count(*) as n FROM registrations WHERE event_id=?", rid)
+            (await one("SELECT count(*) as n FROM registrations WHERE event_id=?", rid))
               .n,
           400,
           "Sức chứa không được nhỏ hơn số người đã đăng ký.",
         );
-      run(
+      await run(
         "UPDATE records SET payload=? WHERE id=?",
         JSON.stringify(payload),
         rid,
       );
     } else {
-      run(
+      await run(
         "INSERT INTO records VALUES(?,?,?,?,?)",
         rid,
         section,
@@ -1243,14 +1238,14 @@ async function api(req, res, path) {
         now(),
       );
       if (section === "groups")
-        run("INSERT INTO memberships VALUES(?,?)", user.id, rid);
+        await run("INSERT INTO memberships VALUES(?,?)", user.id, rid);
     }
-    audit(user.id, section + (existing ? ".update" : ".create"), rid);
+    await audit(user.id, section + (existing ? ".update" : ".create"), rid);
     return json(res, existing ? 200 : 201, { id: rid });
   }
   const recordMatch = path.match(/^\/api\/records\/([a-f0-9-]+)$/);
   if (recordMatch && method === "DELETE") {
-    const r = one("SELECT * FROM records WHERE id=?", recordMatch[1]);
+    const r = await one("SELECT * FROM records WHERE id=?", recordMatch[1]);
     check(r, 404, "Không tìm thấy nội dung.");
     check(
       r.owner === user.id || user.role === "admin",
@@ -1258,15 +1253,15 @@ async function api(req, res, path) {
       "Bạn chỉ có thể xóa nội dung do mình tạo.",
     );
     if (r.section !== "groups") permissions(user, ["teacher", "admin"]);
-    run("DELETE FROM records WHERE id=?", r.id);
-    audit(user.id, r.section + ".delete", r.id);
+    await run("DELETE FROM records WHERE id=?", r.id);
+    await audit(user.id, r.section + ".delete", r.id);
     return json(res, 200, { ok: true });
   }
   const materialMatch = path.match(
     /^\/api\/materials\/([a-f0-9-]+)\/(complete|download)$/,
   );
   if (materialMatch) {
-    const r = one(
+    const r = await one(
       "SELECT * FROM records WHERE id=? AND section='materials'",
       materialMatch[1],
     );
@@ -1278,7 +1273,7 @@ async function api(req, res, path) {
       "Không tìm thấy tài liệu.",
     );
     if (materialMatch[2] === "complete" && method === "POST") {
-      run(
+      await run(
         "INSERT INTO progress VALUES(?,?,1) ON CONFLICT(user_id,material_id) DO UPDATE SET done=1",
         user.id,
         m.id,
@@ -1299,9 +1294,9 @@ async function api(req, res, path) {
   );
   if (groupMatch) {
     const gid = groupMatch[1],
-      r = one("SELECT * FROM records WHERE id=? AND section='groups'", gid);
+      r = await one("SELECT * FROM records WHERE id=? AND section='groups'", gid);
     check(r, 404, "Không tìm thấy nhóm.");
-    const joined = one(
+    const joined = await one(
       "SELECT 1 FROM memberships WHERE user_id=? AND group_id=?",
       user.id,
       gid,
@@ -1310,10 +1305,10 @@ async function api(req, res, path) {
       const b = await body(req);
       check(typeof b.join === "boolean", 400, "Thao tác không hợp lệ.");
       if (b.join)
-        run("INSERT OR IGNORE INTO memberships VALUES(?,?)", user.id, gid);
+        await run("INSERT OR IGNORE INTO memberships VALUES(?,?)", user.id, gid);
       else {
         check(r.owner !== user.id, 400, "Chủ nhóm cần giữ tư cách thành viên.");
-        run(
+        await run(
           "DELETE FROM memberships WHERE user_id=? AND group_id=?",
           user.id,
           gid,
@@ -1328,14 +1323,14 @@ async function api(req, res, path) {
     );
     if (groupMatch[2] === "posts" && method === "GET")
       return json(res, 200, {
-        posts: q(
+        posts: await q(
           "SELECT p.*,u.name FROM posts p JOIN users u ON u.id=p.user_id WHERE group_id=? ORDER BY created LIMIT 100",
           gid,
         ),
       });
     if (groupMatch[2] === "posts" && method === "POST") {
       const b = await body(req);
-      run(
+      await run(
         "INSERT INTO posts VALUES(?,?,?,?,?)",
         id(),
         gid,
@@ -1348,51 +1343,51 @@ async function api(req, res, path) {
   }
   const postMatch = path.match(/^\/api\/posts\/([a-f0-9-]+)$/);
   if (postMatch && method === "DELETE") {
-    const p = one("SELECT * FROM posts WHERE id=?", postMatch[1]);
+    const p = await one("SELECT * FROM posts WHERE id=?", postMatch[1]);
     check(p, 404, "Không tìm thấy bài viết.");
     check(
       p.user_id === user.id || user.role === "admin",
       403,
       "Không có quyền xóa bài viết này.",
     );
-    run("DELETE FROM posts WHERE id=?", p.id);
-    audit(user.id, "post.delete", p.id);
+    await run("DELETE FROM posts WHERE id=?", p.id);
+    await audit(user.id, "post.delete", p.id);
     return json(res, 200, { ok: true });
   }
   const eventMatch = path.match(/^\/api\/events\/([a-f0-9-]+)\/registration$/);
   if (eventMatch && method === "POST") {
     const b = await body(req);
     check(typeof b.register === "boolean", 400, "Thao tác không hợp lệ.");
-    const r = one(
+    const r = await one(
       "SELECT * FROM records WHERE id=? AND section='events'",
       eventMatch[1],
     );
     check(r, 404, "Không tìm thấy sự kiện.");
     const e = record(r);
-    transaction(() => {
+    await transaction(async () => {
       if (b.register) {
         check(
           Date.parse(e.date + "+07:00") > now(),
           400,
           "Sự kiện đã bắt đầu.",
         );
-        const existing = one(
+        const existing = await one(
           "SELECT 1 FROM registrations WHERE user_id=? AND event_id=?",
           user.id,
           e.id,
         );
         check(
           existing ||
-            one(
+            (await one(
               "SELECT count(*) as n FROM registrations WHERE event_id=?",
               e.id,
-            ).n < e.capacity,
+            )).n < e.capacity,
           409,
           "Sự kiện đã đủ người đăng ký.",
         );
-        run("INSERT OR IGNORE INTO registrations VALUES(?,?)", user.id, e.id);
+        await run("INSERT OR IGNORE INTO registrations VALUES(?,?)", user.id, e.id);
       } else
-        run(
+        await run(
           "DELETE FROM registrations WHERE user_id=? AND event_id=?",
           user.id,
           e.id,
@@ -1405,14 +1400,14 @@ async function api(req, res, path) {
     permissions(user, ["student"]);
     const b = await body(req);
     check(
-      one(
+      await one(
         "SELECT id FROM users WHERE id=? AND role='teacher' AND active=1",
         ratingMatch[1],
       ),
       404,
       "Không tìm thấy giảng viên.",
     );
-    run(
+    await run(
       "INSERT INTO ratings VALUES(?,?,?) ON CONFLICT(user_id,teacher_id) DO UPDATE SET value=excluded.value",
       user.id,
       ratingMatch[1],
@@ -1436,11 +1431,11 @@ async function api(req, res, path) {
         : null;
     rate("game:" + user.id, 30, 3600000);
     check(
-      one(
+      (await one(
         "SELECT count(*) as n FROM attempts WHERE user_id=? AND finished IS NULL AND started>?",
         user.id,
         now() - 30 * 60000,
-      ).n < 4,
+      )).n < 4,
       409,
       "Bạn đang có nhiều lượt chơi. Hãy hoàn thành một lượt trước.",
     );
@@ -1471,7 +1466,7 @@ async function api(req, res, path) {
         };
       });
     const aid = id();
-    run(
+    await run(
       "INSERT INTO attempts(id,user_id,mode,questions,started) VALUES(?,?,?,?,?)",
       aid,
       user.id,
@@ -1529,7 +1524,7 @@ async function api(req, res, path) {
   if (path === "/api/games/abandon" && method === "POST") {
     const b = await body(req);
     check(typeof b.id === "string", 400, "Lượt chơi không hợp lệ.");
-    run(
+    await run(
       "UPDATE attempts SET finished=?,score=0 WHERE id=? AND user_id=? AND finished IS NULL",
       now(),
       b.id,
@@ -1540,7 +1535,7 @@ async function api(req, res, path) {
   if (path === "/api/games/submit" && method === "POST") {
     const b = await body(req);
     check(typeof b.id === "string", 400, "Lượt chơi không hợp lệ.");
-    const a = one(
+    const a = await one(
       "SELECT * FROM attempts WHERE id=? AND user_id=?",
       b.id,
       user.id,
@@ -1583,16 +1578,16 @@ async function api(req, res, path) {
       };
     });
     const score = results.filter((x) => x.correct).length;
-    const reward = transaction(() => {
+    const reward = await transaction(async () => {
       check(
-        !one("SELECT finished FROM attempts WHERE id=?", a.id).finished,
+        !(await one("SELECT finished FROM attempts WHERE id=?", a.id)).finished,
         409,
         "Lượt chơi đã được chấm.",
       );
       let amount = 0;
       if (
         score > 0 &&
-        !one(
+        !await one(
           "SELECT 1 FROM game_rewards WHERE user_id=? AND mode=? AND day=?",
           user.id,
           a.mode,
@@ -1600,14 +1595,14 @@ async function api(req, res, path) {
         )
       ) {
         amount = score * 10;
-        run("INSERT INTO game_rewards VALUES(?,?,?)", user.id, a.mode, day());
-        run(
+        await run("INSERT INTO game_rewards VALUES(?,?,?)", user.id, a.mode, day());
+        await run(
           "UPDATE users SET coins=coins+?,xp=xp+? WHERE id=?",
           amount,
           score * 20,
           user.id,
         );
-        run(
+        await run(
           "INSERT INTO ledger VALUES(?,?,?,?,?)",
           id(),
           user.id,
@@ -1615,9 +1610,9 @@ async function api(req, res, path) {
           "Hoàn thành " + gameModes.find((g) => g.id === a.mode).name,
           now(),
         );
-        notify(user.id, `Bạn vừa nhận ${amount} xu từ trò chơi!`);
+        await notify(user.id, `Bạn vừa nhận ${amount} xu từ trò chơi!`);
       }
-      run(
+      await run(
         "UPDATE attempts SET finished=?,score=?,reward=? WHERE id=?",
         now(),
         score,
@@ -1632,26 +1627,26 @@ async function api(req, res, path) {
       reward,
       expired,
       results,
-      user: safeUser(one("SELECT * FROM users WHERE id=?", user.id)),
+      user: safeUser(await one("SELECT * FROM users WHERE id=?", user.id)),
     });
   }
   if (path === "/api/redeem" && method === "POST") {
     const b = await body(req);
     check(typeof b.rewardId === "string", 400, "Quà không hợp lệ.");
-    const receipt = transaction(() => {
-      const r = one("SELECT * FROM rewards WHERE id=?", b.rewardId);
+    const receipt = await transaction(async () => {
+      const r = await one("SELECT * FROM rewards WHERE id=?", b.rewardId);
       check(r, 404, "Không tìm thấy quà.");
       check(r.stock > 0, 409, "Quà đã hết.");
-      const change = run(
+      const change = await run(
         "UPDATE users SET coins=coins-? WHERE id=? AND coins>=?",
         r.cost,
         user.id,
         r.cost,
       );
       check(change.changes, 400, "Bạn chưa đủ xu để đổi món quà này.");
-      run("UPDATE rewards SET stock=stock-1 WHERE id=?", r.id);
+      await run("UPDATE rewards SET stock=stock-1 WHERE id=?", r.id);
       const rid = id();
-      run(
+      await run(
         "INSERT INTO redemptions(id,user_id,reward_id,cost,created) VALUES(?,?,?,?,?)",
         rid,
         user.id,
@@ -1659,7 +1654,7 @@ async function api(req, res, path) {
         r.cost,
         now(),
       );
-      run(
+      await run(
         "INSERT INTO ledger VALUES(?,?,?,?,?)",
         id(),
         user.id,
@@ -1667,11 +1662,11 @@ async function api(req, res, path) {
         "Đổi " + r.title,
         now(),
       );
-      notify(
+      await notify(
         user.id,
         "Đã tạo yêu cầu đổi " + r.title + ". Theo dõi trong lịch sử đổi quà.",
       );
-      audit(user.id, "reward.redeem", rid);
+      await audit(user.id, "reward.redeem", rid);
       return { id: rid, title: r.title };
     });
     return json(res, 201, receipt);
@@ -1680,7 +1675,7 @@ async function api(req, res, path) {
     const b = await body(req);
     integer(b.seconds, 1, 120, "Thời gian");
     rate("activity:" + user.id, 2, 60000);
-    run(
+    await run(
       "INSERT INTO activity VALUES(?,?,?) ON CONFLICT(user_id,day) DO UPDATE SET seconds=seconds+excluded.seconds",
       user.id,
       day(),
@@ -1697,7 +1692,7 @@ async function api(req, res, path) {
         ["summary", "solve", "plan", "analysis"],
         "Chế độ",
       );
-    const corpus = records("materials", user).filter((m) => m.published);
+    const corpus = (await records("materials", user)).filter((m) => m.published);
     const terms = message
       .toLowerCase()
       .split(/\s+/)
@@ -1716,7 +1711,7 @@ async function api(req, res, path) {
       .map((r) => r.m);
     let answer;
     if (mode === "plan") {
-      const tasks = q(
+      const tasks = await q(
         "SELECT title FROM tasks WHERE user_id=? AND done=0 LIMIT 5",
         user.id,
       );
@@ -1725,11 +1720,11 @@ async function api(req, res, path) {
         (tasks.length ? ": " + tasks.map((t) => t.title).join("; ") : ".") +
         "\n5. Cuối ngày, đánh dấu công việc hoàn thành và điều chỉnh lịch ngày mai.";
     } else if (mode === "analysis") {
-      const s = one(
+      const s = await one(
           "SELECT count(*) as total,COALESCE(sum(done),0) as done FROM tasks WHERE user_id=?",
           user.id,
         ),
-        g = one(
+        g = await one(
           "SELECT avg(result) as avg FROM grades WHERE user_id=?",
           user.id,
         );
@@ -1786,11 +1781,11 @@ async function api(req, res, path) {
       if (b.id) {
         check(
           typeof b.id === "string" &&
-            one("SELECT id FROM rewards WHERE id=?", b.id),
+            await one("SELECT id FROM rewards WHERE id=?", b.id),
           404,
           "Không tìm thấy quà.",
         );
-        run(
+        await run(
           "UPDATE rewards SET title=?,icon=?,cost=?,category=?,stock=? WHERE id=?",
           title,
           emoji,
@@ -1800,7 +1795,7 @@ async function api(req, res, path) {
           b.id,
         );
       } else
-        run(
+        await run(
           "INSERT INTO rewards VALUES(?,?,?,?,?,?)",
           id(),
           title,
@@ -1809,32 +1804,32 @@ async function api(req, res, path) {
           category,
           stock,
         );
-      audit(user.id, "reward.manage", b.id || title);
+      await audit(user.id, "reward.manage", b.id || title);
       return json(res, 200, { ok: true });
     }
     if (path === "/api/admin" && method === "GET")
       return json(res, 200, {
-        users: q("SELECT * FROM users ORDER BY created").map(safeUser),
-        audit: q(
+        users: (await q("SELECT * FROM users ORDER BY created")).map(safeUser),
+        audit: await q(
           "SELECT a.*,u.name FROM audit a LEFT JOIN users u ON u.id=a.actor ORDER BY a.created DESC LIMIT 100",
         ),
-        redemptions: q(
+        redemptions: await q(
           "SELECT r.*,u.name,w.title FROM redemptions r JOIN users u ON u.id=r.user_id JOIN rewards w ON w.id=r.reward_id ORDER BY created DESC",
         ),
         counts: {
-          users: one("SELECT count(*) as n FROM users").n,
-          materials: one(
+          users: (await one("SELECT count(*) as n FROM users")).n,
+          materials: (await one(
             "SELECT count(*) as n FROM records WHERE section='materials'",
-          ).n,
-          plays: one(
+          )).n,
+          plays: (await one(
             "SELECT count(*) as n FROM attempts WHERE finished IS NOT NULL",
-          ).n,
+          )).n,
         },
       });
     const userMatch = path.match(/^\/api\/admin\/users\/([a-f0-9-]+)$/);
     if (userMatch && method === "PATCH") {
       const b = await body(req),
-        target = one("SELECT * FROM users WHERE id=?", userMatch[1]);
+        target = await one("SELECT * FROM users WHERE id=?", userMatch[1]);
       check(target, 404, "Không tìm thấy tài khoản.");
       check(
         target.id !== user.id,
@@ -1847,23 +1842,23 @@ async function api(req, res, path) {
         "Vai trò",
       );
       check(typeof b.active === "boolean", 400, "Trạng thái không hợp lệ.");
-      transaction(() => {
+      await transaction(async () => {
         if (target.role === "admin" && (role !== "admin" || !b.active))
           check(
-            one(
+            (await one(
               "SELECT count(*) as n FROM users WHERE role='admin' AND active=1",
-            ).n > 1,
+            )).n > 1,
             400,
             "Phải giữ ít nhất một quản trị viên hoạt động.",
           );
-        run(
+        await run(
           "UPDATE users SET role=?,active=? WHERE id=?",
           role,
           b.active ? 1 : 0,
           target.id,
         );
-        run("DELETE FROM sessions WHERE user_id=?", target.id);
-        audit(user.id, "user.permission", target.id);
+        await run("DELETE FROM sessions WHERE user_id=?", target.id);
+        await audit(user.id, "user.permission", target.id);
       });
       return json(res, 200, { ok: true });
     }
@@ -1873,17 +1868,17 @@ async function api(req, res, path) {
     if (redemptionMatch && method === "PATCH") {
       const b = await body(req),
         status = enumField(b.status, ["completed", "cancelled"], "Trạng thái");
-      transaction(() => {
-        const r = one(
+      await transaction(async () => {
+        const r = await one(
           "SELECT * FROM redemptions WHERE id=?",
           redemptionMatch[1],
         );
         check(r && r.status === "pending", 409, "Yêu cầu không còn chờ xử lý.");
-        run("UPDATE redemptions SET status=? WHERE id=?", status, r.id);
+        await run("UPDATE redemptions SET status=? WHERE id=?", status, r.id);
         if (status === "cancelled") {
-          run("UPDATE users SET coins=coins+? WHERE id=?", r.cost, r.user_id);
-          run("UPDATE rewards SET stock=stock+1 WHERE id=?", r.reward_id);
-          run(
+          await run("UPDATE users SET coins=coins+? WHERE id=?", r.cost, r.user_id);
+          await run("UPDATE rewards SET stock=stock+1 WHERE id=?", r.reward_id);
+          await run(
             "INSERT INTO ledger VALUES(?,?,?,?,?)",
             id(),
             r.user_id,
@@ -1892,21 +1887,21 @@ async function api(req, res, path) {
             now(),
           );
         }
-        notify(
+        await notify(
           r.user_id,
           status === "completed"
             ? "Quà đã được xác nhận trao."
             : "Yêu cầu đổi quà đã hủy và hoàn xu.",
         );
-        audit(user.id, "redemption." + status, r.id);
+        await audit(user.id, "redemption." + status, r.id);
       });
       return json(res, 200, { ok: true });
     }
     if (path === "/api/admin/announcement" && method === "POST") {
       const b = await body(req);
       const title = textField(b.title, "Thông báo", 300);
-      notifyAll(title);
-      audit(user.id, "announcement.create");
+      await notifyAll(title);
+      await audit(user.id, "announcement.create");
       return json(res, 201, { ok: true });
     }
   }
@@ -2009,7 +2004,9 @@ server.headersTimeout = 10000;
 server.keepAliveTimeout = 5000;
 server.maxHeadersCount = 32;
 server.listen(port, host, () =>
-  console.log(`Smart Student chạy tại ${origin}`),
+  console.log(
+    `Smart Student chạy tại ${origin} (database: ${db.kind === "turso" ? "Turso, dữ liệu bền vững" : "SQLite cục bộ " + dataDir})`,
+  ),
 );
 process.on("SIGTERM", () =>
   server.close(() => {

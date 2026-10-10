@@ -17,10 +17,20 @@ mkdirSync(scratch, { recursive: true });
 const dataDir = mkdtempSync(resolve(scratch, "smart-student-test-"));
 const port = 38000 + Math.floor(Math.random() * 1000),
   origin = `http://127.0.0.1:${port}`;
+// TEST_DB_MODE=remote: chạy toàn bộ kịch bản qua máy chủ Turso giả lập (Hrana HTTP).
+const remote = process.env.TEST_DB_MODE === "remote";
+const fakeTurso = remote
+  ? await (await import("./fake-turso.mjs")).startFakeTurso(
+      resolve(dataDir, "smart-student.sqlite"),
+      "test-token",
+    )
+  : null;
 const server = spawn(process.execPath, ["server.mjs"], {
   cwd: project,
   env: {
     ...process.env,
+    TURSO_DATABASE_URL: fakeTurso ? fakeTurso.url : "",
+    TURSO_AUTH_TOKEN: fakeTurso ? "test-token" : "",
     PORT: String(port),
     HOST: "127.0.0.1",
     APP_ORIGIN: origin,
@@ -963,6 +973,10 @@ await test("Smart Student: chức năng và bảo mật đầu cuối", async (t
       server.once("exit", resolve);
       setTimeout(resolve, 2000);
     });
+    if (fakeTurso) {
+      assert.ok(fakeTurso.stats.transactions > 0, "Giao dịch phải đi qua Turso giả lập");
+      await fakeTurso.close();
+    }
     assert.ok(
       resolve(dataDir).startsWith(scratch + sep),
       "Chỉ dọn dữ liệu kiểm thử bên trong thư mục tạm đã chọn.",
